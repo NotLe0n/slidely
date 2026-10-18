@@ -3,5 +3,5 @@
 mod loading;
 mod render;
 
-pub use loading::{PdfDocument, PdfState, close_pdf, open_pdf};
+pub use loading::{LoadingPdf, PdfDocument, PdfState, close_pdf, open_pdf};
 pub use render::PdfData;
