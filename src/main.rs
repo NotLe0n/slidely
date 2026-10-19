@@ -1,3 +1,4 @@
+mod assets;
 mod menus;
 mod pdf;
 mod ui;
@@ -19,7 +20,7 @@ impl Global for Settings {}
 
 fn main() {
     gpui_kit::application()
-        .with_assets(gpui_kit::assets::Assets)
+        .with_assets(assets::AppAssets)
         .run(move |cx| {
             gpui_kit::init(cx);
             Theme::sync_system_appearance(None, cx);

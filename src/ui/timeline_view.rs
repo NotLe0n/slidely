@@ -119,7 +119,7 @@ struct Timeline {
 }
 
 /// `m:ss`, or `h:mm:ss` from an hour on.
-fn format_time(time: Duration) -> String {
+pub(super) fn format_time(time: Duration) -> String {
     let secs = time.as_secs();
     let (h, m, s) = (secs / 3600, secs / 60 % 60, secs % 60);
     if h > 0 {
