@@ -9,7 +9,7 @@ use gpui_kit::{App, AppContext as _, Context, Entity, RenderImage, Task};
 use rfd::AsyncFileDialog;
 
 use super::PdfData;
-use super::render::{RenderedPage, render_pages};
+use super::render::{RenderedPage, render_pages, render_thumbnails};
 
 /// How long the render scale has to stay unchanged before pages are re-rendered,
 /// so stepping through zoom levels doesn't start a render for each step.
@@ -19,6 +19,9 @@ const RERENDER_DELAY: Duration = Duration::from_millis(150);
 const PRERENDER_PAGES: usize = 2;
 /// Rendered pages further than this from the visible ones are released.
 const KEEP_PAGES: usize = 6;
+/// Height page thumbnails are rendered at, in pixels. Twice their displayed height,
+/// so they stay sharp on high-DPI displays.
+const THUMBNAIL_HEIGHT_PX: f32 = 128.;
 
 /// The open document, shared between the UI and the `OpenPdf` action.
 pub struct PdfDocument {
@@ -47,17 +50,24 @@ pub struct LoadedPdf {
     /// Pages currently on screen, as reported by the UI.
     visible: Range<usize>,
     render_job: Option<RenderJob>,
+    /// A small image of every page, filled in as they're rendered.
+    thumbnails: Vec<Option<Arc<RenderImage>>>,
+    thumbnail_job: Option<Job>,
+}
+
+struct RenderJob {
+    render_scale: f32,
+    _job: Job,
 }
 
 /// Background rendering. Dropping it cancels the work: the task is dropped, and the
 /// flag makes the background threads skip pages they haven't started yet.
-struct RenderJob {
-    render_scale: f32,
+struct Job {
     cancelled: Arc<AtomicBool>,
     _task: Task<()>,
 }
 
-impl Drop for RenderJob {
+impl Drop for Job {
     fn drop(&mut self) {
         self.cancelled.store(true, Ordering::Relaxed);
     }
@@ -67,9 +77,11 @@ impl LoadedPdf {
     fn new(data: PdfData) -> Self {
         Self {
             pages: data.page_sizes.iter().map(|_| None).collect(),
+            thumbnails: data.page_sizes.iter().map(|_| None).collect(),
             data,
             visible: 0..0,
             render_job: None,
+            thumbnail_job: None,
         }
     }
 
@@ -77,6 +89,11 @@ impl LoadedPdf {
     /// level while the page is being re-rendered.
     pub fn page_image(&self, ix: usize) -> Option<&Arc<RenderImage>> {
         Some(&self.pages.get(ix)?.as_ref()?.image)
+    }
+
+    /// The thumbnail of page `ix`, once it's rendered.
+    pub fn thumbnail(&self, ix: usize) -> Option<&Arc<RenderImage>> {
+        self.thumbnails.get(ix)?.as_ref()
     }
 
     /// The visible pages extended by `margin` on each side.
@@ -151,6 +168,9 @@ impl PdfDocument {
             for page in loaded.pages.iter_mut().filter_map(Option::take) {
                 cx.drop_image(page.image, None);
             }
+            for image in loaded.thumbnails.iter_mut().filter_map(Option::take) {
+                cx.drop_image(image, None);
+            }
         }
         self.state = state;
         cx.notify();
@@ -173,8 +193,11 @@ impl PdfDocument {
                     }
                 };
                 // Rendering starts once the UI reports which pages are visible.
-                this.update(app, |this, cx| this.set_state(new_state, cx))
-                    .ok();
+                this.update(app, |this, cx| {
+                    this.set_state(new_state, cx);
+                    this.start_thumbnails(cx);
+                })
+                .ok();
             }
         });
 
@@ -247,9 +270,60 @@ impl PdfDocument {
 
         loaded.render_job = Some(RenderJob {
             render_scale,
+            _job: Job {
+                cancelled,
+                _task: task,
+            },
+        });
+    }
+
+    /// Starts rendering the thumbnails of all pages in the background; each one shows
+    /// up as soon as it's done.
+    fn start_thumbnails(&mut self, cx: &mut Context<Self>) {
+        let PdfState::Loaded(loaded) = &mut self.state else {
+            return;
+        };
+        let pdf = loaded.data.pdf.clone();
+        let cancelled = Arc::new(AtomicBool::new(false));
+
+        let task = cx.spawn({
+            let cancelled = cancelled.clone();
+            async move |this, app| {
+                let (thumbnail_tx, mut thumbnail_rx) = futures::channel::mpsc::unbounded();
+                let render = app.background_executor().spawn(async move {
+                    render_thumbnails(&pdf, THUMBNAIL_HEIGHT_PX, &cancelled, |ix, image| {
+                        thumbnail_tx.unbounded_send((ix, image)).ok();
+                    })
+                });
+
+                // The channel closes when `render` finishes and drops the sender.
+                while let Some((ix, image)) = thumbnail_rx.next().await {
+                    let updated = this.update(app, |this, cx| this.insert_thumbnail(ix, image, cx));
+                    if updated.is_err() {
+                        return;
+                    }
+                }
+                render.await;
+            }
+        });
+
+        loaded.thumbnail_job = Some(Job {
             cancelled,
             _task: task,
         });
+    }
+
+    fn insert_thumbnail(&mut self, ix: usize, image: Arc<RenderImage>, cx: &mut Context<Self>) {
+        // Replacing or closing the document drops the job, so a thumbnail that
+        // arrives here belongs to the loaded document.
+        let PdfState::Loaded(loaded) = &mut self.state else {
+            cx.drop_image(image, None);
+            return;
+        };
+        if let Some(old) = loaded.thumbnails[ix].replace(image) {
+            cx.drop_image(old, None);
+        }
+        cx.notify();
     }
 
     fn insert_page(&mut self, ix: usize, page: RenderedPage, cx: &mut Context<Self>) {

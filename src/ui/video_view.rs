@@ -12,7 +12,6 @@ use gpui_kit::*;
 use gpui_video_player::{Video, video as video_element};
 
 use super::document::{empty_screen, loading_dialog};
-use super::timeline_view::format_time;
 use crate::video::{VideoDocument, VideoState, close_video, open_video};
 
 /// Playback speeds offered in the speed menu.
@@ -139,7 +138,6 @@ impl VideoView {
 
     fn player(
         &mut self,
-        path: String,
         video: Video,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -167,7 +165,6 @@ impl VideoView {
 
         v_flex()
             .size_full()
-            .child(div().px_4().py_1().text_sm().child(path))
             .child(
                 div()
                     .id("video-area")
@@ -210,7 +207,11 @@ impl VideoView {
             .px_4()
             .pt_2()
             .child(time_label(video.position()))
-            .child(div().flex_1().child(Slider::new(&self.progress)))
+            .child(
+                div()
+                    .flex_1()
+                    .child(Slider::new(&self.progress).cursor_pointer()),
+            )
             .child(time_label(video.duration()))
     }
 
@@ -285,6 +286,7 @@ impl VideoView {
             .child(toggle_playback)
             .child(toggle_mute)
             .child(div().w(px(100.)).child(Slider::new(&self.volume)))
+            .child(format!("{}%", (volume * 100.0).round()))
             .child(div().flex_1())
             .child(speed_menu)
     }
@@ -294,9 +296,8 @@ impl Render for VideoView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let content = match self.document.read(cx).state() {
             VideoState::Loaded(loaded) => {
-                let path = loaded.path.display().to_string();
                 let video = loaded.video.clone();
-                self.player(path, video, window, cx).into_any_element()
+                self.player(video, window, cx).into_any_element()
             }
             VideoState::Loading(loading) => {
                 let document = self.document.clone();
@@ -319,5 +320,16 @@ impl Render for VideoView {
             .items_center()
             .justify_center()
             .child(content)
+    }
+}
+
+/// `m:ss`, or `h:mm:ss` from an hour on.
+fn format_time(time: Duration) -> String {
+    let secs = time.as_secs();
+    let (h, m, s) = (secs / 3600, secs / 60 % 60, secs % 60);
+    if h > 0 {
+        format!("{h}:{m:02}:{s:02}")
+    } else {
+        format!("{m}:{s:02}")
     }
 }

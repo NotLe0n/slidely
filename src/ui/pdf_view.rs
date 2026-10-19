@@ -48,6 +48,12 @@ impl PdfView {
         }
     }
 
+    /// Scrolls so page `ix` is at the top of the viewport.
+    pub fn scroll_to_page(&mut self, ix: usize, cx: &mut Context<Self>) {
+        self.scroll_handle.scroll_to_item(ix, ScrollStrategy::Top);
+        cx.notify();
+    }
+
     /// Zooms around the viewport's center, for zoom levels set in the zoom bar.
     pub fn set_zoom_percent(&mut self, zoom_percent: f32, cx: &mut Context<Self>) {
         let center = self.scroll_handle.bounds().size.center();
@@ -246,7 +252,6 @@ impl Render for PdfView {
         v_flex()
             .track_focus(&self.focus_handle)
             .size_full()
-            .child(self.zoom_bar.clone())
             .child(
                 div()
                     .relative()
@@ -261,6 +266,7 @@ impl Render for PdfView {
                     .child(Scrollbar::new(&self.scroll_handle))
                     .child(ctrl_wheel_zoom),
             )
+            .child(self.zoom_bar.clone())
             .into_any_element()
     }
 }

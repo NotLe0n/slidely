@@ -87,6 +87,38 @@ pub fn render_pages(
         });
 }
 
+/// Renders every page `height` pixels high on rayon's thread pool, calling `on_page` as
+/// each one finishes. Blocking; run it on a background thread. Pages that haven't
+/// started when `cancelled` is set are skipped.
+pub fn render_thumbnails(
+    pdf: &Pdf,
+    height: f32,
+    cancelled: &AtomicBool,
+    on_page: impl Fn(usize, Arc<RenderImage>) + Sync,
+) {
+    let interpreter_settings = InterpreterSettings::default();
+    let render_settings = RenderSettings::default();
+    let pages = pdf.pages();
+
+    (0..pages.len())
+        .into_par_iter()
+        .for_each_init(RenderCache::new, |cache, ix| {
+            if cancelled.load(Ordering::Relaxed) {
+                return;
+            }
+            let page = &pages[ix];
+            let (_, height_pt) = page.render_dimensions();
+            let image = render_page(
+                page,
+                height / height_pt,
+                cache,
+                &interpreter_settings,
+                &render_settings,
+            );
+            on_page(ix, image);
+        });
+}
+
 fn render_page<'a>(
     page: &'a Page<'a>,
     render_scale: f32,

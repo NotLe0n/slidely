@@ -7,7 +7,7 @@ use super::pdf_view::PdfView;
 use super::video_view::VideoView;
 use crate::Settings;
 use crate::pdf::PdfDocument;
-use crate::ui::timeline_view::TimelineView;
+use crate::ui::timeline_view::{TimelineEvent, TimelineView};
 use crate::video::VideoDocument;
 
 /// The window's root view: title bar with menus, the document, and the zoom bar.
@@ -28,11 +28,16 @@ impl SlidelyUi {
         cx: &mut Context<Self>,
     ) -> Self {
         let pdf_view = cx.new(|cx| PdfView::new(document.clone(), window, cx));
-        let video_view = cx.new(|cx| VideoView::new(video_document.clone(), cx));
-        let timeline_view = cx.new(|cx| TimelineView::new(video_document, cx));
+        let video_view = cx.new(|cx| VideoView::new(video_document, cx));
+        let timeline_view = cx.new(|cx| TimelineView::new(document.clone(), cx));
 
         let _subscriptions = vec![
             cx.observe(&document, |_, _, cx| cx.notify()),
+            cx.subscribe(&timeline_view, |this, _, event, cx| match event {
+                TimelineEvent::PageClicked(ix) => this
+                    .pdf_view
+                    .update(cx, |pdf_view, cx| pdf_view.scroll_to_page(*ix, cx)),
+            }),
             cx.observe_global::<Settings>(|_this, cx| {
                 cx.notify();
             }),
