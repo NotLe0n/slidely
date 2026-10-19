@@ -8,12 +8,23 @@ use gpui_kit::*;
 use pdf::PdfDocument;
 use ui::SlidelyUi;
 
+struct Settings {
+    pdf_view_visible: bool,
+    video_view_visible: bool,
+}
+
+impl Global for Settings {}
+
 fn main() {
     gpui_kit::application()
         .with_assets(gpui_kit::assets::Assets)
         .run(move |cx| {
             gpui_kit::init(cx);
             Theme::sync_system_appearance(None, cx);
+            cx.set_global(Settings {
+                pdf_view_visible: true,
+                video_view_visible: true,
+            });
 
             let document = cx.new(|_| PdfDocument::new());
             menus::init(document.clone(), cx);
