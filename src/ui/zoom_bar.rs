@@ -2,7 +2,7 @@ use gpui_kit::component::input::{InputEvent, InputState, NumberInput};
 use gpui_kit::component::*;
 use gpui_kit::*;
 
-const DEFAULT_ZOOM: f32 = 100.;
+pub const DEFAULT_ZOOM: f32 = 100.;
 pub const MIN_ZOOM: f32 = 10.;
 pub const MAX_ZOOM: f32 = 400.;
 const ZOOM_STEP: f32 = 10.;

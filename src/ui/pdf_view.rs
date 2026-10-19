@@ -5,7 +5,7 @@ use gpui_kit::component::scroll::Scrollbar;
 use gpui_kit::component::*;
 use gpui_kit::*;
 
-use super::zoom_bar::{MAX_ZOOM, MIN_ZOOM};
+use super::zoom_bar::{DEFAULT_ZOOM, MAX_ZOOM, MIN_ZOOM, ZoomBar, ZoomBarEvent};
 use crate::pdf::{PdfDocument, PdfState};
 
 /// Vertical space around each page, split above and below it.
@@ -18,29 +18,33 @@ const ZOOM_PER_WHEEL_LINE: f32 = 1.04;
 /// Converts pixel-based wheel deltas (touchpads) to lines.
 const WHEEL_LINE_HEIGHT: Pixels = px(20.);
 
-pub enum PdfViewEvent {
-    /// The view zoomed itself (Ctrl+scroll) to this level, in percent.
-    ZoomChanged(f32),
-}
-
 /// The pages of the loaded document, in a virtual list so only the visible ones are
 /// laid out, and only those (plus a few around them) are rendered by the document.
 pub struct PdfView {
     document: Entity<PdfDocument>,
+    zoom_bar: Entity<ZoomBar>,
     zoom_percent: f32,
     scroll_handle: VirtualListScrollHandle,
-    _subscription: Subscription,
+    focus_handle: FocusHandle,
+    _subscriptions: Vec<Subscription>,
 }
 
 impl PdfView {
-    pub fn new(document: Entity<PdfDocument>, zoom_percent: f32, cx: &mut Context<Self>) -> Self {
-        // Redraw as pages finish rendering.
-        let _subscription = cx.observe(&document, |_, _, cx| cx.notify());
+    pub fn new(document: Entity<PdfDocument>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let zoom_bar = cx.new(|cx| ZoomBar::new(window, cx));
+
+        let _subscriptions = vec![
+            cx.observe(&document, |_, _, cx| cx.notify()),
+            cx.subscribe_in(&zoom_bar, window, Self::on_zoom_bar_event),
+        ];
+
         Self {
             document,
-            zoom_percent,
+            zoom_bar,
+            zoom_percent: DEFAULT_ZOOM,
             scroll_handle: VirtualListScrollHandle::new(),
-            _subscription,
+            focus_handle: cx.focus_handle(),
+            _subscriptions,
         }
     }
 
@@ -72,7 +76,12 @@ impl PdfView {
         cx.notify();
     }
 
-    fn zoom_by_wheel(&mut self, event: &ScrollWheelEvent, cx: &mut Context<Self>) {
+    fn zoom_by_wheel(
+        &mut self,
+        event: &ScrollWheelEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         // Scrolling up (positive) zooms in.
         let lines = event.delta.pixel_delta(WHEEL_LINE_HEIGHT).y / WHEEL_LINE_HEIGHT;
         let zoom_percent =
@@ -82,7 +91,26 @@ impl PdfView {
         }
         let viewport = self.scroll_handle.bounds();
         self.zoom_to(zoom_percent, event.position - viewport.origin, cx);
-        cx.emit(PdfViewEvent::ZoomChanged(zoom_percent));
+        self.zoom_bar.update(cx, |zoom_bar, cx| {
+            zoom_bar.set_zoom_percent(zoom_percent, window, cx)
+        });
+    }
+
+    fn on_zoom_bar_event(
+        &mut self,
+        zoom_bar: &Entity<ZoomBar>,
+        event: &ZoomBarEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match event {
+            ZoomBarEvent::Changed => {
+                let zoom_percent = zoom_bar.read(cx).zoom_percent();
+                self.set_zoom_percent(zoom_percent, cx)
+            }
+            // Hand focus back to the pages once the zoom is entered.
+            ZoomBarEvent::Confirmed => window.focus(&self.focus_handle, cx),
+        }
     }
 
     /// Display size per PDF point: zoom, and points (1/72 in) to gpui pixels (1/96 in).
@@ -112,8 +140,6 @@ impl PdfView {
         });
     }
 }
-
-impl EventEmitter<PdfViewEvent> for PdfView {}
 
 impl Render for PdfView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -149,7 +175,6 @@ impl Render for PdfView {
                 .chain([size(content_width, px(0.))])
                 .collect::<Vec<_>>(),
         );
-        let path = pdf.data.path.display().to_string();
 
         let list = v_virtual_list(
             cx.entity(),
@@ -203,12 +228,12 @@ impl Render for PdfView {
         let ctrl_wheel_zoom = canvas(
             |_, _, _| {},
             move |bounds, _, window, _| {
-                window.on_mouse_event(move |event: &ScrollWheelEvent, phase, _, cx| {
+                window.on_mouse_event(move |event: &ScrollWheelEvent, phase, window, cx| {
                     if phase == DispatchPhase::Capture
                         && event.modifiers.control
                         && bounds.contains(&event.position)
                     {
-                        view.update(cx, |this, cx| this.zoom_by_wheel(event, cx))
+                        view.update(cx, |this, cx| this.zoom_by_wheel(event, window, cx))
                             .ok();
                         cx.stop_propagation();
                     }
@@ -219,14 +244,19 @@ impl Render for PdfView {
         .inset_0();
 
         v_flex()
+            .track_focus(&self.focus_handle)
             .size_full()
-            .child(div().px_4().py_1().text_sm().child(path))
+            .child(self.zoom_bar.clone())
             .child(
                 div()
                     .relative()
                     .flex_1()
                     .min_h_0()
                     .w_full()
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _, window, cx| window.focus(&this.focus_handle, cx)),
+                    )
                     .child(list)
                     .child(Scrollbar::new(&self.scroll_handle))
                     .child(ctrl_wheel_zoom),

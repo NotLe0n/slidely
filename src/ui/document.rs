@@ -1,10 +1,12 @@
+use std::path::Path;
+
 use gpui_kit::component::button::*;
 use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::*;
 use gpui_kit::*;
 
 use super::pdf_view::PdfView;
-use crate::pdf::{LoadingPdf, PdfDocument, PdfState, close_pdf, open_pdf};
+use crate::pdf::{PdfDocument, PdfState, close_pdf, open_pdf};
 
 pub fn document(
     document: &Entity<PdfDocument>,
@@ -14,19 +16,31 @@ pub fn document(
     match document.read(cx).state() {
         PdfState::Loaded(_) => pdf_view.clone().into_any_element(),
         PdfState::Loading(loading) => {
-            loading_dialog(loading, document.clone(), cx).into_any_element()
+            let document = document.clone();
+            loading_dialog("Opening PDF", &loading.path, cx, move |cx| {
+                close_pdf(cx, document.clone())
+            })
+            .into_any_element()
         }
-        PdfState::None => empty_screen(document.clone()).into_any_element(),
+        PdfState::None => {
+            let document = document.clone();
+            empty_screen("No PDF open", "open-pdf", "Open PDF", move |cx| {
+                open_pdf(cx, document.clone())
+            })
+            .into_any_element()
+        }
     }
 }
 
-fn loading_dialog(
-    loading: &LoadingPdf,
-    document: Entity<PdfDocument>,
+/// Shown while a file loads; `on_cancel` discards the load.
+pub fn loading_dialog(
+    title: &'static str,
+    path: &Path,
     cx: &App,
+    on_cancel: impl Fn(&mut App) + 'static,
 ) -> impl IntoElement {
-    let file_name = loading.path.file_name().map_or_else(
-        || loading.path.display().to_string(),
+    let file_name = path.file_name().map_or_else(
+        || path.display().to_string(),
         |name| name.to_string_lossy().into_owned(),
     );
 
@@ -38,7 +52,7 @@ fn loading_dialog(
         .border_1()
         .border_color(cx.theme().border)
         .rounded(cx.theme().radius_lg)
-        .child(div().font_semibold().child("Opening PDF"))
+        .child(div().font_semibold().child(title))
         .child(
             h_flex()
                 .gap_3()
@@ -50,15 +64,21 @@ fn loading_dialog(
             h_flex().justify_end().child(
                 Button::new("cancel-loading")
                     .label("Cancel")
-                    .on_click(move |_, _, cx| close_pdf(cx, document.clone())),
+                    .on_click(move |_, _, cx| on_cancel(cx)),
             ),
         )
 }
 
-fn empty_screen(document: Entity<PdfDocument>) -> impl IntoElement {
-    v_flex().items_center().child("No PDF open").child(
-        Button::new("open-pdf")
-            .label("Open PDF")
-            .on_click(move |_, _, cx| open_pdf(cx, document.clone())),
+/// Shown when nothing is open, with a button that opens a file.
+pub fn empty_screen(
+    message: &'static str,
+    button_id: &'static str,
+    button_label: &'static str,
+    on_open: impl Fn(&mut App) + 'static,
+) -> impl IntoElement {
+    v_flex().items_center().child(message).child(
+        Button::new(button_id)
+            .label(button_label)
+            .on_click(move |_, _, cx| on_open(cx)),
     )
 }

@@ -3,11 +3,12 @@ use gpui_kit::component::*;
 use gpui_kit::*;
 
 use super::document::document;
-use super::pdf_view::{PdfView, PdfViewEvent};
+use super::pdf_view::PdfView;
 use super::video_view::VideoView;
-use super::zoom_bar::{ZoomBar, ZoomBarEvent};
 use crate::Settings;
 use crate::pdf::PdfDocument;
+use crate::ui::timeline_view::TimelineView;
+use crate::video::VideoDocument;
 
 /// The window's root view: title bar with menus, the document, and the zoom bar.
 pub struct SlidelyUi {
@@ -15,22 +16,23 @@ pub struct SlidelyUi {
     document: Entity<PdfDocument>,
     pdf_view: Entity<PdfView>,
     video_view: Entity<VideoView>,
-    zoom_bar: Entity<ZoomBar>,
-    focus_handle: FocusHandle,
+    timeline_view: Entity<TimelineView>,
     _subscriptions: Vec<Subscription>,
 }
 
 impl SlidelyUi {
-    pub fn new(document: Entity<PdfDocument>, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let zoom_bar = cx.new(|cx| ZoomBar::new(window, cx));
-        let zoom_percent = zoom_bar.read(cx).zoom_percent();
-        let pdf_view = cx.new(|cx| PdfView::new(document.clone(), zoom_percent, cx));
-        let video_view = cx.new(|cx| VideoView::new());
+    pub fn new(
+        document: Entity<PdfDocument>,
+        video_document: Entity<VideoDocument>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let pdf_view = cx.new(|cx| PdfView::new(document.clone(), window, cx));
+        let video_view = cx.new(|cx| VideoView::new(video_document.clone(), cx));
+        let timeline_view = cx.new(|cx| TimelineView::new(video_document, cx));
 
         let _subscriptions = vec![
             cx.observe(&document, |_, _, cx| cx.notify()),
-            cx.subscribe_in(&zoom_bar, window, Self::on_zoom_bar_event),
-            cx.subscribe_in(&pdf_view, window, Self::on_pdf_view_event),
             cx.observe_global::<Settings>(|_this, cx| {
                 cx.notify();
             }),
@@ -41,45 +43,8 @@ impl SlidelyUi {
             document,
             pdf_view,
             video_view,
-            zoom_bar,
-            focus_handle: cx.focus_handle(),
+            timeline_view,
             _subscriptions,
-        }
-    }
-
-    fn on_zoom_bar_event(
-        &mut self,
-        zoom_bar: &Entity<ZoomBar>,
-        event: &ZoomBarEvent,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        match event {
-            ZoomBarEvent::Changed => {
-                let zoom_percent = zoom_bar.read(cx).zoom_percent();
-                self.pdf_view.update(cx, |pdf_view, cx| {
-                    pdf_view.set_zoom_percent(zoom_percent, cx)
-                });
-            }
-            // Hand focus back to the pages once the zoom is entered.
-            ZoomBarEvent::Confirmed => window.focus(&self.focus_handle, cx),
-        }
-    }
-
-    fn on_pdf_view_event(
-        &mut self,
-        _: &Entity<PdfView>,
-        event: &PdfViewEvent,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        match event {
-            // Ctrl+scroll; keep the zoom bar showing the current level.
-            PdfViewEvent::ZoomChanged(zoom_percent) => {
-                self.zoom_bar.update(cx, |zoom_bar, cx| {
-                    zoom_bar.set_zoom_percent(*zoom_percent, window, cx)
-                });
-            }
         }
     }
 }
@@ -90,7 +55,6 @@ impl Render for SlidelyUi {
         let video_view_visible = cx.global::<Settings>().video_view_visible;
 
         v_flex()
-            .track_focus(&self.focus_handle)
             .size_full()
             .bg(cx.theme().background)
             .text_color(cx.theme().foreground)
@@ -106,12 +70,6 @@ impl Render for SlidelyUi {
                                 .items_center()
                                 .justify_center()
                                 .min_h_0()
-                                .on_mouse_down(
-                                    MouseButton::Left,
-                                    cx.listener(|this, _, window, cx| {
-                                        window.focus(&this.focus_handle, cx)
-                                    }),
-                                )
                                 .child(document(&self.document, &self.pdf_view, cx)),
                         ),
                     )
@@ -121,6 +79,6 @@ impl Render for SlidelyUi {
                             .child(self.video_view.clone().into_any_element()),
                     ),
             )
-            .child(self.zoom_bar.clone())
+            .child(self.timeline_view.clone())
     }
 }

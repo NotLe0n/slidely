@@ -11,6 +11,7 @@ image = { version = "0.25", default-features = false }
 anyhow = "1.0.104"
 futures = "0.3"
 rayon = "1"
+gpui-video-player = { git = "https://github.com/getong/gpui-video-player", branch = "support-gpui-pre", default-features = false, features = ["gpui-pre"]}
 
 [profile.dev.package."*"]
 opt-level = 3

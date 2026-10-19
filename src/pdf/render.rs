@@ -17,7 +17,6 @@ const MAX_PAGE_SIDE_PX: f32 = 4096.;
 
 /// A parsed PDF. Pages are rendered on demand with [`render_pages`].
 pub struct PdfData {
-    pub path: PathBuf,
     pub pdf: Arc<Pdf>,
     /// Size of each page in PDF points.
     pub page_sizes: Vec<gpui_kit::Size<Pixels>>,
@@ -44,7 +43,6 @@ impl PdfData {
             })
             .collect();
         Ok(Self {
-            path,
             pdf: Arc::new(pdf),
             page_sizes,
         })

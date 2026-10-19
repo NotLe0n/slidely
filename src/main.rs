@@ -1,12 +1,14 @@
 mod menus;
 mod pdf;
 mod ui;
+mod video;
 
 use gpui_kit::component::{Theme, TitleBar};
 use gpui_kit::*;
 
 use pdf::PdfDocument;
 use ui::SlidelyUi;
+use video::VideoDocument;
 
 struct Settings {
     pdf_view_visible: bool,
@@ -27,7 +29,8 @@ fn main() {
             });
 
             let document = cx.new(|_| PdfDocument::new());
-            menus::init(document.clone(), cx);
+            let video_document = cx.new(|_| VideoDocument::new());
+            menus::init(document.clone(), video_document.clone(), cx);
 
             let restore_bounds = Bounds::centered(None, size(px(1280.), px(800.)), cx);
             let window_opts = WindowOptions {
@@ -42,7 +45,7 @@ fn main() {
                     })
                     .detach();
 
-                cx.new(|cx| SlidelyUi::new(document, window, cx))
+                cx.new(|cx| SlidelyUi::new(document, video_document, window, cx))
             })
             .expect("Failed to open window");
         });
