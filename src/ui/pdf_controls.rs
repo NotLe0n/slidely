@@ -1,3 +1,5 @@
+use gpui_kit::assets::IconName;
+use gpui_kit::component::button::*;
 use gpui_kit::component::input::{InputEvent, InputState, NumberInput};
 use gpui_kit::component::*;
 use gpui_kit::*;
@@ -5,25 +7,29 @@ use gpui_kit::*;
 pub const DEFAULT_ZOOM: f32 = 100.;
 pub const MIN_ZOOM: f32 = 10.;
 pub const MAX_ZOOM: f32 = 400.;
-const ZOOM_STEP: f32 = 10.;
+pub const ZOOM_STEP: f32 = 10.;
 
-pub enum ZoomBarEvent {
-    /// The zoom level changed; read it with [`ZoomBar::zoom`].
-    Changed,
+pub enum PdfControlsBarEvent {
+    /// The zoom level changed to the provided value.
+    ZoomChanged(f32),
     /// The user pressed Enter in the zoom input.
-    Confirmed,
+    ZoomConfirmed,
+    /// The user pressed the fit to page button.
+    FitPage,
+    /// The user pressed the rotate page button.
+    RotatePage,
 }
 
-/// The bottom bar with the zoom input.
-pub struct ZoomBar {
+/// The bottom bar with the zoom input and the page buttons.
+pub struct PdfControlsBar {
     zoom_percent: f32,
     input: Entity<InputState>,
     _subscription: Subscription,
 }
 
-impl EventEmitter<ZoomBarEvent> for ZoomBar {}
+impl EventEmitter<PdfControlsBarEvent> for PdfControlsBar {}
 
-impl ZoomBar {
+impl PdfControlsBar {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let input = cx.new(|cx| {
             InputState::new(window, cx)
@@ -73,17 +79,17 @@ impl ZoomBar {
             InputEvent::Change => {
                 if let Ok(zoom) = input.read(cx).value().trim().parse::<f32>() {
                     self.zoom_percent = zoom.clamp(MIN_ZOOM, MAX_ZOOM);
-                    cx.emit(ZoomBarEvent::Changed);
+                    cx.emit(PdfControlsBarEvent::ZoomChanged(self.zoom_percent));
                     cx.notify();
                 }
             }
-            InputEvent::PressEnter { .. } => cx.emit(ZoomBarEvent::Confirmed),
+            InputEvent::PressEnter { .. } => cx.emit(PdfControlsBarEvent::ZoomConfirmed),
             _ => {}
         }
     }
 }
 
-impl Render for ZoomBar {
+impl Render for PdfControlsBar {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         h_flex()
             .flex_shrink_0()
@@ -100,6 +106,22 @@ impl Render for ZoomBar {
                     .flex_none()
                     .w(px(120.))
                     .child(NumberInput::new(&self.input).small().suffix("%")),
+            )
+            .child(
+                Button::new("fit-page")
+                    .ghost()
+                    .small()
+                    .icon(IconName::Fullscreen)
+                    .tooltip("Fit page")
+                    .on_click(cx.listener(|_, _, _, cx| cx.emit(PdfControlsBarEvent::FitPage))),
+            )
+            .child(
+                Button::new("rotate-page")
+                    .ghost()
+                    .small()
+                    .icon(IconName::RotateCw)
+                    .tooltip("Rotate page clockwise")
+                    .on_click(cx.listener(|_, _, _, cx| cx.emit(PdfControlsBarEvent::RotatePage))),
             )
     }
 }

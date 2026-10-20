@@ -5,11 +5,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use futures::StreamExt as _;
-use gpui_kit::{App, AppContext as _, Context, Entity, RenderImage, Task};
+use gpui_kit::{App, AppContext as _, Context, Entity, Pixels, RenderImage, Size, Task};
 use rfd::AsyncFileDialog;
 
-use super::PdfData;
 use super::render::{RenderedPage, render_pages, render_thumbnails};
+use super::{PdfData, Rotation};
 
 /// How long the render scale has to stay unchanged before pages are re-rendered,
 /// so stepping through zoom levels doesn't start a render for each step.
@@ -45,6 +45,10 @@ pub struct LoadingPdf {
 
 pub struct LoadedPdf {
     pub data: PdfData,
+    /// How far the user turned each page.
+    rotations: Vec<Rotation>,
+    /// Size of each page in PDF points, with its rotation applied.
+    page_sizes: Vec<Size<Pixels>>,
     /// Rendered image of each page, if it's near the visible ones.
     pages: Vec<Option<RenderedPage>>,
     /// Pages currently on screen, as reported by the UI.
@@ -52,7 +56,8 @@ pub struct LoadedPdf {
     render_job: Option<RenderJob>,
     /// A small image of every page, filled in as they're rendered.
     thumbnails: Vec<Option<Arc<RenderImage>>>,
-    thumbnail_job: Option<Job>,
+    /// The job rendering all thumbnails after loading, plus one per rotated page.
+    thumbnail_jobs: Vec<Job>,
 }
 
 struct RenderJob {
@@ -78,11 +83,22 @@ impl LoadedPdf {
         Self {
             pages: data.page_sizes.iter().map(|_| None).collect(),
             thumbnails: data.page_sizes.iter().map(|_| None).collect(),
+            rotations: data
+                .page_sizes
+                .iter()
+                .map(|_| Rotation::default())
+                .collect(),
+            page_sizes: data.page_sizes.clone(),
             data,
             visible: 0..0,
             render_job: None,
-            thumbnail_job: None,
+            thumbnail_jobs: Vec::new(),
         }
+    }
+
+    /// Size of each page in PDF points, as displayed (i.e. rotated).
+    pub fn page_sizes(&self) -> &[Size<Pixels>] {
+        &self.page_sizes
     }
 
     /// The most recently rendered image of page `ix`. It may be from a previous zoom
@@ -161,6 +177,34 @@ impl PdfDocument {
         self.schedule_render(None, cx);
     }
 
+    /// Turns page `ix` 90° clockwise and re-renders it.
+    pub fn rotate_page(&mut self, ix: usize, cx: &mut Context<Self>) {
+        let PdfState::Loaded(loaded) = &mut self.state else {
+            return;
+        };
+        if ix >= loaded.rotations.len() {
+            return;
+        }
+        let rotation = loaded.rotations[ix].clockwise();
+        loaded.rotations[ix] = rotation;
+        loaded.page_sizes[ix] = rotation.apply(loaded.data.page_sizes[ix]);
+
+        // The old images have the wrong orientation; show placeholders until the new
+        // ones are done rather than stretched images.
+        if let Some(page) = loaded.pages[ix].take() {
+            cx.drop_image(page.image, None);
+        }
+        if let Some(image) = loaded.thumbnails[ix].take() {
+            cx.drop_image(image, None);
+        }
+        // A running render may include this page at its old rotation; the restarted
+        // one picks up every page that's still missing.
+        loaded.render_job = None;
+        self.schedule_render(None, cx);
+        self.render_thumbnails(vec![ix], cx);
+        cx.notify();
+    }
+
     fn set_state(&mut self, state: PdfState, cx: &mut Context<Self>) {
         // Free the old document's GPU textures; replacing the state drops (and so
         // cancels) a running load or render.
@@ -194,8 +238,12 @@ impl PdfDocument {
                 };
                 // Rendering starts once the UI reports which pages are visible.
                 this.update(app, |this, cx| {
+                    let page_count = match &new_state {
+                        PdfState::Loaded(loaded) => loaded.pages.len(),
+                        _ => 0,
+                    };
                     this.set_state(new_state, cx);
-                    this.start_thumbnails(cx);
+                    this.render_thumbnails((0..page_count).collect(), cx);
                 })
                 .ok();
             }
@@ -216,7 +264,7 @@ impl PdfDocument {
             return;
         }
 
-        let mut missing: Vec<usize> = loaded
+        let mut missing: Vec<_> = loaded
             .around_visible(PRERENDER_PAGES)
             .filter(|&ix| {
                 !loaded.pages[ix]
@@ -230,6 +278,10 @@ impl PdfDocument {
         // Visible pages first.
         let visible = loaded.visible.clone();
         missing.sort_by_key(|&ix| !visible.contains(&ix));
+        let missing: Vec<_> = missing
+            .into_iter()
+            .map(|ix| (ix, loaded.rotations[ix]))
+            .collect();
 
         let pdf = loaded.data.pdf.clone();
         let cancelled = Arc::new(AtomicBool::new(false));
@@ -277,12 +329,16 @@ impl PdfDocument {
         });
     }
 
-    /// Starts rendering the thumbnails of all pages in the background; each one shows
-    /// up as soon as it's done.
-    fn start_thumbnails(&mut self, cx: &mut Context<Self>) {
+    /// Starts rendering the thumbnails of the pages at `indices` in the background;
+    /// each one shows up as soon as it's done.
+    fn render_thumbnails(&mut self, indices: Vec<usize>, cx: &mut Context<Self>) {
         let PdfState::Loaded(loaded) = &mut self.state else {
             return;
         };
+        let pages: Vec<_> = indices
+            .into_iter()
+            .map(|ix| (ix, loaded.rotations[ix]))
+            .collect();
         let pdf = loaded.data.pdf.clone();
         let cancelled = Arc::new(AtomicBool::new(false));
 
@@ -291,14 +347,22 @@ impl PdfDocument {
             async move |this, app| {
                 let (thumbnail_tx, mut thumbnail_rx) = futures::channel::mpsc::unbounded();
                 let render = app.background_executor().spawn(async move {
-                    render_thumbnails(&pdf, THUMBNAIL_HEIGHT_PX, &cancelled, |ix, image| {
-                        thumbnail_tx.unbounded_send((ix, image)).ok();
-                    })
+                    render_thumbnails(
+                        &pdf,
+                        &pages,
+                        THUMBNAIL_HEIGHT_PX,
+                        &cancelled,
+                        |ix, rotation, image| {
+                            thumbnail_tx.unbounded_send((ix, rotation, image)).ok();
+                        },
+                    )
                 });
 
                 // The channel closes when `render` finishes and drops the sender.
-                while let Some((ix, image)) = thumbnail_rx.next().await {
-                    let updated = this.update(app, |this, cx| this.insert_thumbnail(ix, image, cx));
+                while let Some((ix, rotation, image)) = thumbnail_rx.next().await {
+                    let updated = this.update(app, |this, cx| {
+                        this.insert_thumbnail(ix, rotation, image, cx)
+                    });
                     if updated.is_err() {
                         return;
                     }
@@ -307,19 +371,30 @@ impl PdfDocument {
             }
         });
 
-        loaded.thumbnail_job = Some(Job {
+        loaded.thumbnail_jobs.push(Job {
             cancelled,
             _task: task,
         });
     }
 
-    fn insert_thumbnail(&mut self, ix: usize, image: Arc<RenderImage>, cx: &mut Context<Self>) {
+    fn insert_thumbnail(
+        &mut self,
+        ix: usize,
+        rotation: Rotation,
+        image: Arc<RenderImage>,
+        cx: &mut Context<Self>,
+    ) {
         // Replacing or closing the document drops the job, so a thumbnail that
         // arrives here belongs to the loaded document.
         let PdfState::Loaded(loaded) = &mut self.state else {
             cx.drop_image(image, None);
             return;
         };
+        if loaded.rotations[ix] != rotation {
+            // The page was rotated while this was rendering; another job renders it.
+            cx.drop_image(image, None);
+            return;
+        }
         if let Some(old) = loaded.thumbnails[ix].replace(image) {
             cx.drop_image(old, None);
         }

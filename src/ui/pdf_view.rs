@@ -5,8 +5,10 @@ use gpui_kit::component::scroll::Scrollbar;
 use gpui_kit::component::*;
 use gpui_kit::*;
 
-use super::zoom_bar::{DEFAULT_ZOOM, MAX_ZOOM, MIN_ZOOM, ZoomBar, ZoomBarEvent};
-use crate::pdf::{PdfDocument, PdfState};
+use super::pdf_controls::{
+    DEFAULT_ZOOM, MAX_ZOOM, MIN_ZOOM, PdfControlsBar, PdfControlsBarEvent, ZOOM_STEP,
+};
+use crate::pdf::{LoadedPdf, PdfDocument, PdfState};
 
 /// Vertical space around each page, split above and below it.
 const PAGE_GAP: Pixels = px(16.);
@@ -22,7 +24,7 @@ const WHEEL_LINE_HEIGHT: Pixels = px(20.);
 /// laid out, and only those (plus a few around them) are rendered by the document.
 pub struct PdfView {
     document: Entity<PdfDocument>,
-    zoom_bar: Entity<ZoomBar>,
+    zoom_bar: Entity<PdfControlsBar>,
     zoom_percent: f32,
     scroll_handle: VirtualListScrollHandle,
     focus_handle: FocusHandle,
@@ -31,7 +33,7 @@ pub struct PdfView {
 
 impl PdfView {
     pub fn new(document: Entity<PdfDocument>, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let zoom_bar = cx.new(|cx| ZoomBar::new(window, cx));
+        let zoom_bar = cx.new(|cx| PdfControlsBar::new(window, cx));
 
         let _subscriptions = vec![
             cx.observe(&document, |_, _, cx| cx.notify()),
@@ -54,10 +56,24 @@ impl PdfView {
         cx.notify();
     }
 
-    /// Zooms around the viewport's center, for zoom levels set in the zoom bar.
+    /// Zooms around the viewport's center.
     pub fn set_zoom_percent(&mut self, zoom_percent: f32, cx: &mut Context<Self>) {
         let center = self.scroll_handle.bounds().size.center();
         self.zoom_to(zoom_percent, center, cx);
+    }
+
+    /// Zooms in one step of the zoom input.
+    pub fn zoom_in(&mut self, cx: &mut Context<Self>) {
+        self.set_zoom_percent((self.zoom_percent + ZOOM_STEP).min(MAX_ZOOM), cx);
+    }
+
+    /// Zooms out one step of the zoom input.
+    pub fn zoom_out(&mut self, cx: &mut Context<Self>) {
+        self.set_zoom_percent((self.zoom_percent - ZOOM_STEP).max(MIN_ZOOM), cx);
+    }
+
+    pub fn reset_zoom(&mut self, cx: &mut Context<Self>) {
+        self.set_zoom_percent(DEFAULT_ZOOM, cx);
     }
 
     /// Zooms so the document point at `anchor` (relative to the viewport's top left)
@@ -70,7 +86,7 @@ impl PdfView {
         // The list clamps the offset to the new content size when it lays out next.
         if let PdfState::Loaded(pdf) = self.document.read(cx).state() {
             let offset = zoom_anchored_offset(
-                &pdf.data.page_sizes,
+                pdf.page_sizes(),
                 old_scale,
                 new_scale,
                 self.scroll_handle.offset(),
@@ -82,12 +98,7 @@ impl PdfView {
         cx.notify();
     }
 
-    fn zoom_by_wheel(
-        &mut self,
-        event: &ScrollWheelEvent,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    fn zoom_by_wheel(&mut self, event: &ScrollWheelEvent, cx: &mut Context<Self>) {
         // Scrolling up (positive) zooms in.
         let lines = event.delta.pixel_delta(WHEEL_LINE_HEIGHT).y / WHEEL_LINE_HEIGHT;
         let zoom_percent =
@@ -97,26 +108,73 @@ impl PdfView {
         }
         let viewport = self.scroll_handle.bounds();
         self.zoom_to(zoom_percent, event.position - viewport.origin, cx);
-        self.zoom_bar.update(cx, |zoom_bar, cx| {
-            zoom_bar.set_zoom_percent(zoom_percent, window, cx)
-        });
     }
 
     fn on_zoom_bar_event(
         &mut self,
-        zoom_bar: &Entity<ZoomBar>,
-        event: &ZoomBarEvent,
+        _zoom_bar: &Entity<PdfControlsBar>,
+        event: &PdfControlsBarEvent,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         match event {
-            ZoomBarEvent::Changed => {
-                let zoom_percent = zoom_bar.read(cx).zoom_percent();
-                self.set_zoom_percent(zoom_percent, cx)
+            PdfControlsBarEvent::ZoomChanged(new_zoom_percent) => {
+                self.set_zoom_percent(*new_zoom_percent, cx)
             }
-            // Hand focus back to the pages once the zoom is entered.
-            ZoomBarEvent::Confirmed => window.focus(&self.focus_handle, cx),
+            PdfControlsBarEvent::ZoomConfirmed => window.focus(&self.focus_handle, cx),
+            PdfControlsBarEvent::FitPage => self.fit_page(cx),
+            PdfControlsBarEvent::RotatePage => self.rotate_page(cx),
         }
+    }
+
+    /// The index of the page in the middle of the viewport.
+    fn current_page(&self, cx: &App) -> Option<usize> {
+        let PdfState::Loaded(pdf) = self.document.read(cx).state() else {
+            return None;
+        };
+        let viewport = self.scroll_handle.bounds().size;
+        let center_y = -self.scroll_handle.offset().y + viewport.height / 2.;
+        page_at(pdf.page_sizes(), self.display_scale(), center_y)
+    }
+
+    /// Turns the page in the middle of the viewport 90° clockwise.
+    pub fn rotate_page(&mut self, cx: &mut Context<Self>) {
+        if let Some(ix) = self.current_page(cx) {
+            self.document
+                .update(cx, |document, cx| document.rotate_page(ix, cx));
+        }
+    }
+
+    /// Zooms so the page in the middle of the viewport fits into it entirely, and
+    /// scrolls that page to the top.
+    pub fn fit_page(&mut self, cx: &mut Context<Self>) {
+        let Some(ix) = self.current_page(cx) else {
+            return;
+        };
+        let PdfState::Loaded(pdf) = self.document.read(cx).state() else {
+            return;
+        };
+
+        self.zoom_percent = self.get_fitted_page_zoom(ix, pdf);
+
+        let page_top = pdf.page_sizes()[..ix]
+            .iter()
+            .map(|page| page.height * self.display_scale() + PAGE_GAP)
+            .fold(px(0.), |top, height| top + height);
+
+        self.scroll_handle.set_offset(point(px(0.), -page_top));
+        cx.notify();
+    }
+
+    fn get_fitted_page_zoom(&mut self, page_idx: usize, pdf: &LoadedPdf) -> f32 {
+        let page_sizes = pdf.page_sizes();
+        let viewport = self.scroll_handle.bounds().size;
+
+        // The page's gap and side margins have to fit as well.
+        let page = page_sizes[page_idx];
+        let fit_scale = ((viewport.height - PAGE_GAP) / page.height)
+            .min((viewport.width - PAGE_MARGIN * 2.) / page.width);
+        return (fit_scale / (96. / 72.) * 100.).clamp(MIN_ZOOM, MAX_ZOOM);
     }
 
     /// Display size per PDF point: zoom, and points (1/72 in) to gpui pixels (1/96 in).
@@ -154,13 +212,21 @@ impl Render for PdfView {
         let scale = self.display_scale();
         self.report_to_document(None, Some(scale * window.scale_factor()), cx);
 
+        // Show zoom levels set elsewhere (Ctrl+scroll, fit page, the menu) in the zoom
+        // bar. Values it sent itself already match, so this doesn't fight typing.
+        let zoom_percent = self.zoom_percent;
+        if self.zoom_bar.read(cx).zoom_percent() != zoom_percent {
+            self.zoom_bar.update(cx, |zoom_bar, cx| {
+                zoom_bar.set_zoom_percent(zoom_percent, window, cx)
+            });
+        }
+
         let PdfState::Loaded(pdf) = self.document.read(cx).state() else {
             return div().into_any_element();
         };
 
         let page_sizes: Vec<_> = pdf
-            .data
-            .page_sizes
+            .page_sizes()
             .iter()
             .map(|page| size(page.width * scale, page.height * scale))
             .collect();
@@ -234,12 +300,12 @@ impl Render for PdfView {
         let ctrl_wheel_zoom = canvas(
             |_, _, _| {},
             move |bounds, _, window, _| {
-                window.on_mouse_event(move |event: &ScrollWheelEvent, phase, window, cx| {
+                window.on_mouse_event(move |event: &ScrollWheelEvent, phase, _, cx| {
                     if phase == DispatchPhase::Capture
                         && event.modifiers.control
                         && bounds.contains(&event.position)
                     {
-                        view.update(cx, |this, cx| this.zoom_by_wheel(event, window, cx))
+                        view.update(cx, |this, cx| this.zoom_by_wheel(event, cx))
                             .ok();
                         cx.stop_propagation();
                     }
@@ -269,6 +335,19 @@ impl Render for PdfView {
             .child(self.zoom_bar.clone())
             .into_any_element()
     }
+}
+
+/// The index of the page whose item (page plus gap) contains the document position `y`
+/// at `scale`, or the last page if `y` is past them all.
+fn page_at(page_sizes: &[gpui_kit::Size<Pixels>], scale: f32, y: Pixels) -> Option<usize> {
+    let mut bottom = px(0.);
+    for (ix, page) in page_sizes.iter().enumerate() {
+        bottom += page.height * scale + PAGE_GAP;
+        if y < bottom {
+            return Some(ix);
+        }
+    }
+    page_sizes.len().checked_sub(1)
 }
 
 /// The scroll offset at `new_scale` that keeps the document point at `anchor` (relative

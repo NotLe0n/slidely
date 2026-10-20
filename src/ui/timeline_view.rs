@@ -37,8 +37,7 @@ impl TimelineView {
             PdfState::Loaded(pdf) => {
                 // Copied out so the document isn't borrowed while building the strip.
                 let pages: Vec<_> = pdf
-                    .data
-                    .page_sizes
+                    .page_sizes()
                     .iter()
                     .enumerate()
                     .map(|(ix, size)| (size.width / size.height, pdf.thumbnail(ix).cloned()))

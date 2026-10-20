@@ -7,7 +7,9 @@ use gpui_kit::*;
 // `IconName` lists every icon, but `assets::Assets` only embeds the defaults.
 icon_assets!(
     ExtraIcons,
-    [Gauge, Volume, Volume1, Volume2, VolumeOff, VolumeX]
+    [
+        Fullscreen, Gauge, RotateCw, Volume, Volume1, Volume2, VolumeOff, VolumeX
+    ]
 );
 
 /// gpui-kit's default assets plus the extra icons.

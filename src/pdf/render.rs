@@ -22,6 +22,26 @@ pub struct PdfData {
     pub page_sizes: Vec<gpui_kit::Size<Pixels>>,
 }
 
+/// Clockwise rotation of a page in quarter turns, applied on top of the PDF's own.
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+pub struct Rotation(u8);
+
+impl Rotation {
+    /// This rotation turned 90° further clockwise.
+    pub fn clockwise(self) -> Self {
+        Self((self.0 + 1) % 4)
+    }
+
+    /// The size of a page of `size` once rotated.
+    pub fn apply(self, size: gpui_kit::Size<Pixels>) -> gpui_kit::Size<Pixels> {
+        if self.0 % 2 == 1 {
+            gpui_kit::size(size.height, size.width)
+        } else {
+            size
+        }
+    }
+}
+
 pub struct RenderedPage {
     pub image: Arc<RenderImage>,
     /// Pixels per PDF point that were requested for `image`. The image may be smaller
@@ -49,12 +69,12 @@ impl PdfData {
     }
 }
 
-/// Renders the pages at `indices` at `render_scale` pixels per point on rayon's thread
-/// pool, calling `on_page` as each one finishes. Blocking; run it on a background thread.
+/// Renders the pages at the given indices, rotated, at `render_scale` pixels per point on
+/// rayon's thread pool, calling `on_page` as each one finishes. Blocking; run it on a background thread.
 /// Pages that haven't started when `cancelled` is set are skipped.
 pub fn render_pages(
     pdf: &Pdf,
-    indices: &[usize],
+    indices: &[(usize, Rotation)],
     render_scale: f32,
     cancelled: &AtomicBool,
     on_page: impl Fn(usize, RenderedPage) + Sync,
@@ -66,12 +86,13 @@ pub fn render_pages(
     indices
         .par_iter()
         // `RenderCache` isn't thread-safe, so each worker thread gets its own.
-        .for_each_init(RenderCache::new, |cache, &ix| {
+        .for_each_init(RenderCache::new, |cache, &(ix, rotation)| {
             if cancelled.load(Ordering::Relaxed) {
                 return;
             }
             let image = render_page(
                 &pages[ix],
+                rotation,
                 render_scale,
                 cache,
                 &interpreter_settings,
@@ -87,40 +108,45 @@ pub fn render_pages(
         });
 }
 
-/// Renders every page `height` pixels high on rayon's thread pool, calling `on_page` as
-/// each one finishes. Blocking; run it on a background thread. Pages that haven't
-/// started when `cancelled` is set are skipped.
+/// Renders the pages at the given indices, rotated, `height` pixels high on rayon's
+/// thread pool, calling `on_page` with each one's index, rotation and image as it
+/// finishes. Blocking; run it on a background thread. Pages that haven't started when
+/// `cancelled` is set are skipped.
 pub fn render_thumbnails(
     pdf: &Pdf,
+    indices: &[(usize, Rotation)],
     height: f32,
     cancelled: &AtomicBool,
-    on_page: impl Fn(usize, Arc<RenderImage>) + Sync,
+    on_page: impl Fn(usize, Rotation, Arc<RenderImage>) + Sync,
 ) {
     let interpreter_settings = InterpreterSettings::default();
     let render_settings = RenderSettings::default();
     let pages = pdf.pages();
 
-    (0..pages.len())
-        .into_par_iter()
-        .for_each_init(RenderCache::new, |cache, ix| {
+    indices
+        .par_iter()
+        .for_each_init(RenderCache::new, |cache, &(ix, rotation)| {
             if cancelled.load(Ordering::Relaxed) {
                 return;
             }
             let page = &pages[ix];
-            let (_, height_pt) = page.render_dimensions();
+            let (width_pt, height_pt) = page.render_dimensions();
+            let height_pt = rotation.apply(size(px(width_pt), px(height_pt))).height;
             let image = render_page(
                 page,
-                height / height_pt,
+                rotation,
+                height / f32::from(height_pt),
                 cache,
                 &interpreter_settings,
                 &render_settings,
             );
-            on_page(ix, image);
+            on_page(ix, rotation, image);
         });
 }
 
 fn render_page<'a>(
     page: &'a Page<'a>,
+    rotation: Rotation,
     render_scale: f32,
     cache: &RenderCache<'a>,
     interpreter_settings: &InterpreterSettings,
@@ -151,5 +177,11 @@ fn render_page<'a>(
 
     let buffer = image::RgbaImage::from_raw(width, height, bytes)
         .expect("pixmap buffer matches its dimensions");
+    let buffer = match rotation.0 {
+        1 => image::imageops::rotate90(&buffer),
+        2 => image::imageops::rotate180(&buffer),
+        3 => image::imageops::rotate270(&buffer),
+        _ => buffer,
+    };
     Arc::new(RenderImage::new([image::Frame::new(buffer)]))
 }

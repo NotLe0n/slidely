@@ -12,10 +12,7 @@ use gpui_kit::*;
 use gpui_video_player::{Video, video as video_element};
 
 use super::document::{empty_screen, loading_dialog};
-use crate::video::{VideoDocument, VideoState, close_video, open_video};
-
-/// Playback speeds offered in the speed menu.
-const SPEEDS: &[f64] = &[0.25, 0.5, 0.75, 1., 1.25, 1.5, 2.];
+use crate::video::{PLAYBACK_SPEEDS, VideoDocument, VideoState, close_video, open_video};
 
 /// The open video, or a prompt to open one.
 pub struct VideoView {
@@ -99,7 +96,7 @@ impl VideoView {
     }
 
     /// Plays or pauses the video; at the end, plays it again from the start.
-    fn toggle_playback(&mut self, cx: &mut Context<Self>) {
+    pub fn toggle_playback(&mut self, cx: &mut Context<Self>) {
         let Some(video) = self.video(cx) else {
             return;
         };
@@ -109,6 +106,23 @@ impl VideoView {
             video.set_paused(false);
         } else {
             video.set_paused(!video.paused());
+        }
+        cx.notify();
+    }
+
+    pub fn toggle_mute(&mut self, cx: &mut Context<Self>) {
+        if let Some(video) = self.video(cx) {
+            video.set_muted(!video.muted());
+            cx.notify();
+        }
+    }
+
+    /// Sets the playback speed as a factor of the normal speed.
+    pub fn set_speed(&mut self, speed: f64, cx: &mut Context<Self>) {
+        if let Some(video) = self.video(cx)
+            && let Err(err) = video.set_speed(speed)
+        {
+            eprintln!("Failed to set playback speed: {err}");
         }
         cx.notify();
     }
@@ -244,12 +258,7 @@ impl VideoView {
                 }
             })
             .tooltip(if muted { "Unmute" } else { "Mute" })
-            .on_click(cx.listener(|this, _, _, cx| {
-                if let Some(video) = this.video(cx) {
-                    video.set_muted(!video.muted());
-                    cx.notify();
-                }
-            }));
+            .on_click(cx.listener(|this, _, _, cx| this.toggle_mute(cx)));
 
         let view = cx.entity().downgrade();
         let speed_menu = Button::new("speed")
@@ -258,21 +267,13 @@ impl VideoView {
             .label(format!("{speed}×"))
             .tooltip("Playback speed")
             .dropdown_menu(move |mut menu, _, _| {
-                for &option in SPEEDS {
+                for &option in PLAYBACK_SPEEDS {
                     let view = view.clone();
                     menu = menu.item(
                         PopupMenuItem::new(format!("{option}×"))
                             .checked(option == speed)
                             .on_click(move |_, _, cx| {
-                                view.update(cx, |this, cx| {
-                                    if let Some(video) = this.video(cx)
-                                        && let Err(err) = video.set_speed(option)
-                                    {
-                                        eprintln!("Failed to set playback speed: {err}");
-                                    }
-                                    cx.notify();
-                                })
-                                .ok();
+                                view.update(cx, |this, cx| this.set_speed(option, cx)).ok();
                             }),
                     );
                 }

@@ -6,11 +6,22 @@ use gpui_kit::*;
 use crate::{
     Settings,
     pdf::{PdfDocument, close_pdf, open_pdf},
-    video::{VideoDocument, close_video, open_video},
+    video::{PLAYBACK_SPEEDS, VideoDocument, close_video, open_video},
 };
 
 actions!(slidely, [Quit, OpenPdf, ClosePdf, OpenVideo, CloseVideo]);
 actions!(slidely, [TogglePdfView, ToggleVideoView]);
+// Handled by the views, since they hold the zoom level and the playback controls.
+actions!(
+    slidely,
+    [ZoomIn, ZoomOut, ResetZoom, FitPage, RotatePageClockwise]
+);
+actions!(slidely, [TogglePlayback, ToggleMute]);
+
+/// Sets the video's playback speed to the given factor.
+#[derive(Action, Clone, PartialEq)]
+#[action(namespace = slidely, no_json)]
+pub struct SetPlaybackSpeed(pub f64);
 
 /// Registers the app's actions and menus. `document` is where `OpenPdf` loads into,
 /// `video_document` where `OpenVideo` does.
@@ -33,6 +44,16 @@ pub fn init(document: Entity<PdfDocument>, video_document: Entity<VideoDocument>
         });
     });
 
+    set_menus(false, false, cx);
+}
+
+/// Sets the menu bar's menus, with the PDF and video items disabled unless a PDF or
+/// video is loaded. `AppMenuBar` has to be reloaded afterwards to show the change.
+pub fn set_menus(pdf_loaded: bool, video_loaded: bool, cx: &mut App) {
+    let speed_items = PLAYBACK_SPEEDS.iter().map(|&speed| {
+        MenuItem::action(format!("{speed}×"), SetPlaybackSpeed(speed)).disabled(!video_loaded)
+    });
+
     cx.set_menus([
         Menu::new("File").items([
             MenuItem::action("Open PDF", OpenPdf),
@@ -46,6 +67,20 @@ pub fn init(document: Entity<PdfDocument>, video_document: Entity<VideoDocument>
         Menu::new("View").items([
             MenuItem::action("Toggle PDF View", TogglePdfView),
             MenuItem::action("Toggle video View", ToggleVideoView),
+            MenuItem::separator(),
+            MenuItem::action("Zoom In", ZoomIn).disabled(!pdf_loaded),
+            MenuItem::action("Zoom Out", ZoomOut).disabled(!pdf_loaded),
+            MenuItem::action("Reset Zoom", ResetZoom).disabled(!pdf_loaded),
+            MenuItem::action("Fit Page", FitPage).disabled(!pdf_loaded),
+            MenuItem::action("Rotate Page Clockwise", RotatePageClockwise).disabled(!pdf_loaded),
+            MenuItem::separator(),
+            MenuItem::action("Play/Pause", TogglePlayback).disabled(!video_loaded),
+            MenuItem::action("Mute/Unmute", ToggleMute).disabled(!video_loaded),
+            MenuItem::submenu(
+                Menu::new("Playback Speed")
+                    .items(speed_items)
+                    .disabled(!video_loaded),
+            ),
         ]),
     ]);
 
