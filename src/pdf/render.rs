@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use gpui_kit::{Pixels, RenderImage, px, size};
+use gpui_kit::{Pixels, RenderImage, Size, px, size};
 use hayro::hayro_interpret::InterpreterSettings;
 use hayro::hayro_syntax::Pdf;
 use hayro::hayro_syntax::page::Page;
@@ -19,11 +19,11 @@ const MAX_PAGE_SIDE_PX: f32 = 4096.;
 pub struct PdfData {
     pub pdf: Arc<Pdf>,
     /// Size of each page in PDF points.
-    pub page_sizes: Vec<gpui_kit::Size<Pixels>>,
+    pub page_sizes: Vec<Size<Pixels>>,
 }
 
 /// Clockwise rotation of a page in quarter turns, applied on top of the PDF's own.
-#[derive(Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Rotation(u8);
 
 impl Rotation {
@@ -32,12 +32,12 @@ impl Rotation {
         Self((self.0 + 1) % 4)
     }
 
-    /// The size of a page of `size` once rotated.
-    pub fn apply(self, size: gpui_kit::Size<Pixels>) -> gpui_kit::Size<Pixels> {
+    /// The size of `page` once rotated.
+    pub fn apply(self, page: Size<Pixels>) -> Size<Pixels> {
         if self.0 % 2 == 1 {
-            gpui_kit::size(size.height, size.width)
+            size(page.height, page.width)
         } else {
-            size
+            page
         }
     }
 }
@@ -47,6 +47,8 @@ pub struct RenderedPage {
     /// Pixels per PDF point that were requested for `image`. The image may be smaller
     /// if the page hit `MAX_PAGE_SIDE_PX`.
     pub render_scale: f32,
+    /// The rotation `image` was rendered with.
+    pub rotation: Rotation,
 }
 
 impl PdfData {
@@ -69,9 +71,9 @@ impl PdfData {
     }
 }
 
-/// Renders the pages at the given indices, rotated, at `render_scale` pixels per point on
-/// rayon's thread pool, calling `on_page` as each one finishes. Blocking; run it on a background thread.
-/// Pages that haven't started when `cancelled` is set are skipped.
+/// Renders the pages at the given indices, rotated, at `render_scale` pixels per point
+/// on rayon's thread pool, calling `on_page` as each one finishes. Blocking; run it on
+/// a background thread. Pages that haven't started when `cancelled` is set are skipped.
 pub fn render_pages(
     pdf: &Pdf,
     indices: &[(usize, Rotation)],
@@ -103,6 +105,7 @@ pub fn render_pages(
                 RenderedPage {
                     image,
                     render_scale,
+                    rotation,
                 },
             );
         });
@@ -171,8 +174,8 @@ fn render_page<'a>(
 
     let mut bytes = pixmap.take_rgba8(ImageAlphaType::AlphaPremultiplied);
     // hayro: RGBA, gpui: BGRA.
-    for px in bytes.chunks_exact_mut(4) {
-        px.swap(0, 2);
+    for pixel in bytes.as_chunks_mut::<4>().0 {
+        pixel.swap(0, 2);
     }
 
     let buffer = image::RgbaImage::from_raw(width, height, bytes)

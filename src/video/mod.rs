@@ -19,6 +19,11 @@ pub struct VideoDocument {
 pub enum VideoState {
     Loaded(LoadedVideo),
     Loading(LoadingVideo),
+    /// The last file couldn't be opened.
+    Failed {
+        path: PathBuf,
+        error: String,
+    },
     None,
 }
 
@@ -42,6 +47,10 @@ impl VideoDocument {
 
     pub fn state(&self) -> &VideoState {
         &self.state
+    }
+
+    pub fn is_loaded(&self) -> bool {
+        matches!(self.state, VideoState::Loaded(_))
     }
 
     /// Closes the video, cancelling any load in progress.
@@ -78,10 +87,10 @@ impl VideoDocument {
 
                 let new_state = match result {
                     Ok(video) => VideoState::Loaded(LoadedVideo { video }),
-                    Err(err) => {
-                        eprintln!("Failed to open video: {err}");
-                        VideoState::None
-                    }
+                    Err(err) => VideoState::Failed {
+                        path,
+                        error: format!("{err:#}"),
+                    },
                 };
                 this.update(app, |this, cx| this.set_state(new_state, cx))
                     .ok();
@@ -125,11 +134,10 @@ impl VideoDocument {
 }
 
 /// Asks the user for a video file and starts loading it into `document`.
-pub fn open_video(cx: &mut App, document: Entity<VideoDocument>) {
+pub fn open_video(document: Entity<VideoDocument>, cx: &mut App) {
     cx.spawn(async move |app| {
         let selected_file = AsyncFileDialog::new()
             .add_filter("video", VIDEO_EXTENSIONS)
-            .set_directory("/")
             .pick_file()
             .await;
 
@@ -141,8 +149,4 @@ pub fn open_video(cx: &mut App, document: Entity<VideoDocument>) {
         app.update_entity(&document, |document, cx| document.start_loading(path, cx));
     })
     .detach();
-}
-
-pub fn close_video(cx: &mut App, document: Entity<VideoDocument>) {
-    cx.update_entity(&document, |document, cx| document.close(cx));
 }

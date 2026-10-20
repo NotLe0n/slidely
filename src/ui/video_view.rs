@@ -11,8 +11,8 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use gpui_video_player::{Video, video as video_element};
 
-use super::document::{empty_screen, loading_dialog};
-use crate::video::{PLAYBACK_SPEEDS, VideoDocument, VideoState, close_video, open_video};
+use super::placeholders::{empty_screen, failed_screen, loading_dialog};
+use crate::video::{PLAYBACK_SPEEDS, VideoDocument, VideoState, open_video};
 
 /// The open video, or a prompt to open one.
 pub struct VideoView {
@@ -229,13 +229,24 @@ impl VideoView {
             .child(time_label(video.duration()))
     }
 
+    /// Play/pause, volume and speed.
     fn controls(&self, video: &Video, cx: &mut Context<Self>) -> impl IntoElement {
-        let playing = !video.paused() && !video.eos();
-        let muted = video.muted() || video.volume() == 0.;
-        let speed = video.speed();
         let volume = video.volume();
+        h_flex()
+            .gap_2()
+            .px_4()
+            .py_2()
+            .child(self.playback_button(video, cx))
+            .child(self.mute_button(video, cx))
+            .child(div().w(px(100.)).child(Slider::new(&self.volume)))
+            .child(format!("{}%", (volume * 100.0).round()))
+            .child(div().flex_1())
+            .child(self.speed_menu(video, cx))
+    }
 
-        let toggle_playback = Button::new("toggle-playback")
+    fn playback_button(&self, video: &Video, cx: &mut Context<Self>) -> Button {
+        let playing = !video.paused() && !video.eos();
+        Button::new("toggle-playback")
             .ghost()
             .icon(if playing {
                 IconName::Pause
@@ -243,14 +254,17 @@ impl VideoView {
                 IconName::Play
             })
             .tooltip(if playing { "Pause" } else { "Play" })
-            .on_click(cx.listener(|this, _, _, cx| this.toggle_playback(cx)));
+            .on_click(cx.listener(|this, _, _, cx| this.toggle_playback(cx)))
+    }
 
-        let toggle_mute = Button::new("toggle-mute")
+    fn mute_button(&self, video: &Video, cx: &mut Context<Self>) -> Button {
+        let muted = video.muted() || video.volume() == 0.;
+        Button::new("toggle-mute")
             .ghost()
             .icon(if video.muted() {
                 IconName::VolumeX
             } else {
-                match volume {
+                match video.volume() {
                     0.75..=1.0 => IconName::Volume2,
                     0.25..0.75 => IconName::Volume1,
                     0.0..0.25 => IconName::Volume,
@@ -258,10 +272,14 @@ impl VideoView {
                 }
             })
             .tooltip(if muted { "Unmute" } else { "Mute" })
-            .on_click(cx.listener(|this, _, _, cx| this.toggle_mute(cx)));
+            .on_click(cx.listener(|this, _, _, cx| this.toggle_mute(cx)))
+    }
 
+    /// A button showing the playback speed, with a menu to change it.
+    fn speed_menu(&self, video: &Video, cx: &mut Context<Self>) -> impl IntoElement {
+        let speed = video.speed();
         let view = cx.entity().downgrade();
-        let speed_menu = Button::new("speed")
+        Button::new("speed")
             .ghost()
             .icon(IconName::Gauge)
             .label(format!("{speed}×"))
@@ -278,42 +296,39 @@ impl VideoView {
                     );
                 }
                 menu
-            });
-
-        h_flex()
-            .gap_2()
-            .px_4()
-            .py_2()
-            .child(toggle_playback)
-            .child(toggle_mute)
-            .child(div().w(px(100.)).child(Slider::new(&self.volume)))
-            .child(format!("{}%", (volume * 100.0).round()))
-            .child(div().flex_1())
-            .child(speed_menu)
+            })
     }
 }
 
 impl Render for VideoView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let document = self.document.clone();
         let content = match self.document.read(cx).state() {
             VideoState::Loaded(loaded) => {
                 let video = loaded.video.clone();
                 self.player(video, window, cx).into_any_element()
             }
             VideoState::Loading(loading) => {
-                let document = self.document.clone();
                 loading_dialog("Opening video", &loading.path, cx, move |cx| {
-                    close_video(cx, document.clone())
+                    document.update(cx, |document, cx| document.close(cx))
                 })
                 .into_any_element()
             }
-            VideoState::None => {
-                let document = self.document.clone();
-                empty_screen("No video open", "open-video", "Open Video", move |cx| {
-                    open_video(cx, document.clone())
+            VideoState::Failed { path, error } => {
+                failed_screen(path, error, "open-video", "Open Video", cx, move |cx| {
+                    open_video(document.clone(), cx)
                 })
                 .into_any_element()
             }
+            VideoState::None => empty_screen(
+                "No video open",
+                None,
+                "open-video",
+                "Open Video",
+                cx,
+                move |cx| open_video(document.clone(), cx),
+            )
+            .into_any_element(),
         };
 
         v_flex()

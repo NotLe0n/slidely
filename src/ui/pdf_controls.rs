@@ -4,13 +4,10 @@ use gpui_kit::component::input::{InputEvent, InputState, NumberInput};
 use gpui_kit::component::*;
 use gpui_kit::*;
 
-pub const DEFAULT_ZOOM: f32 = 100.;
-pub const MIN_ZOOM: f32 = 10.;
-pub const MAX_ZOOM: f32 = 400.;
-pub const ZOOM_STEP: f32 = 10.;
+use super::pdf_view::{DEFAULT_ZOOM, MAX_ZOOM, MIN_ZOOM, ZOOM_STEP};
 
 pub enum PdfControlsBarEvent {
-    /// The zoom level changed to the provided value.
+    /// The user entered this zoom level, clamped to the allowed range.
     ZoomChanged(f32),
     /// The user pressed Enter in the zoom input.
     ZoomConfirmed,
@@ -20,9 +17,9 @@ pub enum PdfControlsBarEvent {
     RotatePage,
 }
 
-/// The bottom bar with the zoom input and the page buttons.
+/// The bar below the pages, with the zoom input and the page buttons. It only shows
+/// the zoom level; `PdfView` owns it.
 pub struct PdfControlsBar {
-    zoom_percent: f32,
     input: Entity<InputState>,
     _subscription: Subscription,
 }
@@ -42,30 +39,19 @@ impl PdfControlsBar {
         let _subscription = cx.subscribe_in(&input, window, Self::on_input_event);
 
         Self {
-            zoom_percent: DEFAULT_ZOOM,
             input,
             _subscription,
         }
     }
 
-    pub fn zoom_percent(&self) -> f32 {
-        self.zoom_percent
-    }
-
-    /// Shows a zoom level set elsewhere (e.g. Ctrl+scroll), without emitting `Changed`.
-    pub fn set_zoom_percent(
-        &mut self,
-        zoom_percent: f32,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.zoom_percent = zoom_percent;
-        // The input only takes whole numbers; the exact value is kept in `zoom_percent`.
+    /// Shows a zoom level set elsewhere (e.g. Ctrl+scroll), without emitting
+    /// `ZoomChanged`.
+    pub fn show_zoom(&mut self, zoom_percent: f32, window: &mut Window, cx: &mut Context<Self>) {
+        // The input only takes whole numbers.
         let text = zoom_percent.round().to_string();
         // `set_value` doesn't emit `InputEvent::Change`, so this doesn't loop back.
         self.input
             .update(cx, |input, cx| input.set_value(text, window, cx));
-        cx.notify();
     }
 
     fn on_input_event(
@@ -78,9 +64,9 @@ impl PdfControlsBar {
         match event {
             InputEvent::Change => {
                 if let Ok(zoom) = input.read(cx).value().trim().parse::<f32>() {
-                    self.zoom_percent = zoom.clamp(MIN_ZOOM, MAX_ZOOM);
-                    cx.emit(PdfControlsBarEvent::ZoomChanged(self.zoom_percent));
-                    cx.notify();
+                    cx.emit(PdfControlsBarEvent::ZoomChanged(
+                        zoom.clamp(MIN_ZOOM, MAX_ZOOM),
+                    ));
                 }
             }
             InputEvent::PressEnter { .. } => cx.emit(PdfControlsBarEvent::ZoomConfirmed),
