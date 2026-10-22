@@ -11,10 +11,16 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use gpui_video_player::{Video, video as video_element};
 
-use super::placeholders::{empty_screen, failed_screen, loading_dialog};
-use crate::video::{PLAYBACK_SPEEDS, VideoDocument, VideoState, open_video};
+use super::placeholders::{failed_screen, loading_dialog};
+use crate::video::{PLAYBACK_SPEEDS, RunningTranscription, Stage, VideoDocument, VideoState};
 
-/// The open video, or a prompt to open one.
+pub enum VideoViewEvent {
+    /// The user asked to remove the video from the project: they cancelled loading
+    /// it, or it couldn't be opened.
+    Remove,
+}
+
+/// One of the project's videos.
 pub struct VideoView {
     document: Entity<VideoDocument>,
     /// Size of the area the video is fitted into, measured during the last paint.
@@ -202,8 +208,22 @@ impl VideoView {
                         )
                     }),
             )
+            .child(self.caption(&video, cx))
             .child(self.progress_bar(&video, cx))
             .child(self.controls(&video, cx))
+    }
+
+    /// The transcript segment being spoken, once the video is transcribed.
+    fn caption(&self, video: &Video, cx: &mut Context<Self>) -> impl IntoElement {
+        let text = self
+            .document
+            .read(cx)
+            .transcript()
+            .and_then(|transcript| transcript.segment_at(video.position()))
+            .map(|segment| segment.text.clone());
+        div().when_some(text, |caption, text| {
+            caption.px_4().pt_2().w_full().text_center().child(text)
+        })
     }
 
     /// The seek slider, between the elapsed and the total time.
@@ -300,35 +320,29 @@ impl VideoView {
     }
 }
 
+impl EventEmitter<VideoViewEvent> for VideoView {}
+
 impl Render for VideoView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let document = self.document.clone();
+        let view = cx.entity().downgrade();
+        let remove = move |cx: &mut App| {
+            view.update(cx, |_, cx| cx.emit(VideoViewEvent::Remove))
+                .ok();
+        };
         let content = match self.document.read(cx).state() {
             VideoState::Loaded(loaded) => {
                 let video = loaded.video.clone();
                 self.player(video, window, cx).into_any_element()
             }
             VideoState::Loading(loading) => {
-                loading_dialog("Opening video", &loading.path, cx, move |cx| {
-                    document.update(cx, |document, cx| document.close(cx))
-                })
-                .into_any_element()
+                loading_dialog("Opening video", &loading.path, cx, remove).into_any_element()
             }
-            VideoState::Failed { path, error } => {
-                failed_screen(path, error, "open-video", "Open Video", cx, move |cx| {
-                    open_video(document.clone(), cx)
-                })
-                .into_any_element()
+            VideoState::Failed { path, error, .. } => {
+                failed_screen(path, error, "remove-video", "Remove Video", cx, remove)
+                    .into_any_element()
             }
-            VideoState::None => empty_screen(
-                "No video open",
-                None,
-                "open-video",
-                "Open Video",
-                cx,
-                move |cx| open_video(document.clone(), cx),
-            )
-            .into_any_element(),
+            // Only briefly, while the video is being removed.
+            VideoState::None => div().into_any_element(),
         };
 
         v_flex()
@@ -336,6 +350,17 @@ impl Render for VideoView {
             .items_center()
             .justify_center()
             .child(content)
+    }
+}
+
+/// What a running transcription is doing, e.g. "Transcribing 45%".
+pub fn progress_label(running: &RunningTranscription) -> String {
+    match (running.stage(), running.percent()) {
+        (Stage::ExtractingAudio, percent) => {
+            format!("Extracting audio {}%", percent.unwrap_or(0))
+        }
+        (Stage::LoadingModel, _) => "Loading model".into(),
+        (Stage::Transcribing, percent) => format!("Transcribing {}%", percent.unwrap_or(0)),
     }
 }
 

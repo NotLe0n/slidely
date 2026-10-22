@@ -1,15 +1,15 @@
 mod assets;
 mod menus;
 mod pdf;
+mod project;
 mod ui;
 mod video;
 
 use gpui_kit::component::{Theme, TitleBar};
 use gpui_kit::*;
 
-use pdf::PdfDocument;
+use project::{Project, confirm_discard};
 use ui::SlidelyUi;
-use video::VideoDocument;
 
 struct Settings {
     pdf_view_visible: bool,
@@ -29,9 +29,8 @@ fn main() {
                 video_view_visible: true,
             });
 
-            let pdf_document = cx.new(|_| PdfDocument::new());
-            let video_document = cx.new(|_| VideoDocument::new());
-            menus::init(pdf_document.clone(), video_document.clone(), cx);
+            let project = cx.new(|_| Project::new());
+            menus::init(project.clone(), cx);
 
             let restore_bounds = Bounds::centered(None, size(px(1280.), px(800.)), cx);
             let window_opts = WindowOptions {
@@ -45,8 +44,19 @@ fn main() {
                         Theme::sync_system_appearance(Some(window), cx)
                     })
                     .detach();
+                let this = project.clone();
+                window.on_window_should_close(cx, move |_, cx| {
+                    if !this.read(cx).has_unsaved_changes(cx) {
+                        return true;
+                    }
+                    // Asked once this window isn't being updated anymore, since the
+                    // prompt is shown in it.
+                    let project = this.clone();
+                    cx.defer(move |cx| confirm_discard(project, cx, |cx| cx.quit()));
+                    false
+                });
 
-                cx.new(|cx| SlidelyUi::new(pdf_document, video_document, window, cx))
+                cx.new(|cx| SlidelyUi::new(project, window, cx))
             })
             .expect("Failed to open window");
         });

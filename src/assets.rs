@@ -8,7 +8,8 @@ use gpui_kit::*;
 icon_assets!(
     ExtraIcons,
     [
-        Fullscreen, Gauge, RotateCw, Volume, Volume1, Volume2, VolumeOff, VolumeX
+        Captions, CircleStop, Fullscreen, Gauge, RotateCw, Volume, Volume1, Volume2, VolumeOff,
+        VolumeX
     ]
 );
 

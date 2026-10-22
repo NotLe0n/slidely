@@ -1,16 +1,23 @@
 //! Application actions and the menu bar.
 
+use std::cell::RefCell;
+use std::rc::Rc;
+
 use gpui_kit::component::GlobalState;
 use gpui_kit::*;
 
 use crate::{
     Settings,
-    pdf::{PdfDocument, open_pdf},
-    video::{PLAYBACK_SPEEDS, VideoDocument, open_video},
+    project::{Project, confirm_discard, open_project, save_project},
+    ui::open_manage_project,
+    video::PLAYBACK_SPEEDS,
 };
 
-actions!(slidely, [Quit, OpenPdf, ClosePdf, OpenVideo, CloseVideo]);
-actions!(slidely, [TogglePdfView, ToggleVideoView]);
+actions!(
+    slidely,
+    [Quit, NewProject, OpenProject, SaveProject, CloseProject]
+);
+actions!(slidely, [ManageProject, TogglePdfView, ToggleVideoView]);
 // Handled by the views, since they hold the zoom level and the playback controls.
 actions!(
     slidely,
@@ -23,31 +30,73 @@ actions!(slidely, [TogglePlayback, ToggleMute]);
 #[action(namespace = slidely, no_json)]
 pub struct SetPlaybackSpeed(pub f64);
 
-/// Which documents are loaded; the menu items acting on one are disabled without it.
+/// What the menu items act on; the items are disabled when there's nothing to act on.
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
-pub struct LoadedDocuments {
-    pub pdf: bool,
-    pub video: bool,
+pub struct MenuState {
+    pub project_open: bool,
+    /// Pages of a PDF are shown.
+    pub pdf_loaded: bool,
+    /// The video that's shown is loaded.
+    pub video_loaded: bool,
 }
 
-/// Registers the app's actions and menus. `pdf_document` is where `OpenPdf` loads
-/// into, `video_document` where `OpenVideo` does. The actions acting on the views are
-/// registered by the root view.
-pub fn init(
-    pdf_document: Entity<PdfDocument>,
-    video_document: Entity<VideoDocument>,
-    cx: &mut App,
-) {
-    cx.on_action(|_: &Quit, cx| cx.quit());
-    let pdf = pdf_document.clone();
-    cx.on_action(move |_: &OpenPdf, cx| open_pdf(pdf.clone(), cx));
-    cx.on_action(move |_: &ClosePdf, cx| {
-        pdf_document.update(cx, |document, cx| document.close(cx))
+impl MenuState {
+    pub fn of(project: &Entity<Project>, cx: &App) -> Self {
+        let project = project.read(cx);
+        Self {
+            project_open: project.is_open(),
+            pdf_loaded: project.pdfs().iter().any(|pdf| pdf.read(cx).is_loaded()),
+            video_loaded: project
+                .active_video()
+                .is_some_and(|video| video.read(cx).is_loaded()),
+        }
+    }
+}
+
+/// Registers the app's actions and menus, which act on `project`. The actions acting
+/// on the views are registered by the root view.
+pub fn init(project: Entity<Project>, cx: &mut App) {
+    // The actions replacing the open project ask to save its changes first.
+    let this = project.clone();
+    cx.on_action(move |_: &Quit, cx| confirm_discard(this.clone(), cx, |cx| cx.quit()));
+
+    let this = project.clone();
+    cx.on_action(move |_: &NewProject, cx| {
+        let project = this.clone();
+        confirm_discard(this.clone(), cx, move |cx| {
+            project.update(cx, |project, cx| project.new_project(cx))
+        });
     });
-    let video = video_document.clone();
-    cx.on_action(move |_: &OpenVideo, cx| open_video(video.clone(), cx));
-    cx.on_action(move |_: &CloseVideo, cx| {
-        video_document.update(cx, |document, cx| document.close(cx))
+    let this = project.clone();
+    cx.on_action(move |_: &OpenProject, cx| {
+        let project = this.clone();
+        confirm_discard(this.clone(), cx, move |cx| open_project(project, cx));
+    });
+    let this = project.clone();
+    cx.on_action(move |_: &SaveProject, cx| save_project(this.clone(), cx));
+
+    // The Manage Project window's handle, so it's only opened once.
+    let manage_window: Rc<RefCell<Option<AnyWindowHandle>>> = Rc::new(RefCell::new(None));
+    let this = project.clone();
+    let window = manage_window.clone();
+    cx.on_action(move |_: &CloseProject, cx| {
+        let project = this.clone();
+        let window = window.clone();
+        confirm_discard(this.clone(), cx, move |cx| {
+            project.update(cx, |project, cx| project.close_project(cx));
+            // There's no project left to manage.
+            if let Some(handle) = window.borrow_mut().take() {
+                handle
+                    .update(cx, |_, window, _| window.remove_window())
+                    .ok();
+            }
+        });
+    });
+    let this = project.clone();
+    cx.on_action(move |_: &ManageProject, cx| {
+        if this.read(cx).is_open() {
+            open_manage_project(this.clone(), &mut manage_window.borrow_mut(), cx);
+        }
     });
     cx.on_action(|_: &TogglePdfView, cx| {
         cx.update_global::<Settings, _>(|value, _| {
@@ -60,31 +109,33 @@ pub fn init(
         });
     });
 
-    set_menus(LoadedDocuments::default(), cx);
+    set_menus(MenuState::default(), cx);
 }
 
-/// Sets the menu bar's menus, with the items acting on a document disabled unless it's
-/// loaded. `AppMenuBar` has to be reloaded afterwards to show the change.
-pub fn set_menus(loaded: LoadedDocuments, cx: &mut App) {
-    let no_pdf = !loaded.pdf;
-    let no_video = !loaded.video;
+/// Sets the menu bar's menus, with the items disabled that have nothing to act on.
+/// `AppMenuBar` has to be reloaded afterwards to show the change.
+pub fn set_menus(state: MenuState, cx: &mut App) {
+    let no_project = !state.project_open;
+    let no_pdf = !state.pdf_loaded;
+    let no_video = !state.video_loaded;
     let speed_items = PLAYBACK_SPEEDS.iter().map(|&speed| {
         MenuItem::action(format!("{speed}×"), SetPlaybackSpeed(speed)).disabled(no_video)
     });
 
     cx.set_menus([
         Menu::new("File").items([
-            MenuItem::action("Open PDF", OpenPdf),
-            MenuItem::action("Close PDF", ClosePdf),
-            MenuItem::separator(),
-            MenuItem::action("Open Video", OpenVideo),
-            MenuItem::action("Close Video", CloseVideo),
+            MenuItem::action("New Project", NewProject),
+            MenuItem::action("Open Project", OpenProject),
+            MenuItem::action("Save Project", SaveProject).disabled(no_project),
+            MenuItem::action("Close Project", CloseProject).disabled(no_project),
             MenuItem::separator(),
             MenuItem::action("Quit", Quit),
         ]),
         Menu::new("View").items([
-            MenuItem::action("Toggle PDF View", TogglePdfView),
-            MenuItem::action("Toggle Video View", ToggleVideoView),
+            MenuItem::action("Manage Project…", ManageProject).disabled(no_project),
+            MenuItem::separator(),
+            MenuItem::action("Toggle PDF View", TogglePdfView).disabled(no_project),
+            MenuItem::action("Toggle Video View", ToggleVideoView).disabled(no_project),
             MenuItem::separator(),
             MenuItem::action("Zoom In", ZoomIn).disabled(no_pdf),
             MenuItem::action("Zoom Out", ZoomOut).disabled(no_pdf),

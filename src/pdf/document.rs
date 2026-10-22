@@ -1,16 +1,16 @@
 use std::collections::HashMap;
 use std::ops::Range;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use futures::StreamExt as _;
-use gpui_kit::{App, AppContext as _, Context, Entity, Pixels, RenderImage, Size, Task};
-use rfd::AsyncFileDialog;
+use gpui_kit::{Context, Pixels, RenderImage, Size, Task};
 
 use super::PX_PER_POINT;
 use super::render::{PdfData, RenderedPage, Rotation, render_pages, render_thumbnails};
+use super::text::{PageText, extract_text};
 
 /// How long the render scale has to stay unchanged before pages are re-rendered,
 /// so stepping through zoom levels doesn't start a render for each step.
@@ -33,23 +33,28 @@ pub struct PdfDocument {
 }
 
 pub enum PdfState {
-    Loaded(LoadedPdf),
+    Loaded(Box<LoadedPdf>),
     Loading(LoadingPdf),
     /// The last file couldn't be opened.
     Failed {
         path: PathBuf,
         error: String,
+        /// The text given to `load`, kept so it's saved and used when it's retried.
+        page_texts: Option<Vec<PageText>>,
     },
     None,
 }
 
 pub struct LoadingPdf {
     pub path: PathBuf,
+    /// The text given to `load`, kept here so it's saved while the PDF loads.
+    page_texts: Option<Vec<PageText>>,
     /// Dropping it discards the load.
     _task: Task<()>,
 }
 
 pub struct LoadedPdf {
+    path: PathBuf,
     data: PdfData,
     /// How far the user turned each page.
     rotations: Vec<Rotation>,
@@ -66,6 +71,10 @@ pub struct LoadedPdf {
     thumbnail_job: Option<Job>,
     /// Re-renders the thumbnail of a rotated page, by page index.
     rotated_thumbnail_jobs: HashMap<usize, Job>,
+    /// The text of every page, once it's extracted.
+    page_texts: Option<Vec<PageText>>,
+    /// Extracts the text of all pages after loading.
+    text_job: Option<Job>,
 }
 
 struct RenderJob {
@@ -87,9 +96,10 @@ impl Drop for Job {
 }
 
 impl LoadedPdf {
-    fn new(data: PdfData) -> Self {
+    fn new(path: PathBuf, data: PdfData) -> Self {
         let page_count = data.page_sizes.len();
         Self {
+            path,
             pages: (0..page_count).map(|_| None).collect(),
             thumbnails: (0..page_count).map(|_| None).collect(),
             rotations: vec![Rotation::default(); page_count],
@@ -99,6 +109,8 @@ impl LoadedPdf {
             render_job: None,
             thumbnail_job: None,
             rotated_thumbnail_jobs: HashMap::new(),
+            page_texts: None,
+            text_job: None,
         }
     }
 
@@ -118,8 +130,22 @@ impl LoadedPdf {
         self.thumbnails.get(ix)?.as_ref()
     }
 
-    /// The visible pages extended by `margin` on each side.
+    /// The text of page `ix`, once it's extracted.
+    pub fn page_text(&self, ix: usize) -> Option<&PageText> {
+        self.page_texts.as_ref()?.get(ix)
+    }
+
+    /// The text of every page, once it's extracted.
+    pub fn page_texts(&self) -> Option<&[PageText]> {
+        self.page_texts.as_deref()
+    }
+
+    /// The visible pages extended by `margin` on each side; none if no page is
+    /// visible, e.g. while another PDF is on screen.
     fn around_visible(&self, margin: usize) -> Range<usize> {
+        if self.visible.is_empty() {
+            return 0..0;
+        }
         self.visible.start.saturating_sub(margin)..(self.visible.end + margin).min(self.pages.len())
     }
 }
@@ -139,6 +165,40 @@ impl PdfDocument {
 
     pub fn is_loaded(&self) -> bool {
         matches!(self.state, PdfState::Loaded(_))
+    }
+
+    /// The PDF file that's open, loading, or failed to open.
+    pub fn path(&self) -> Option<&Path> {
+        match &self.state {
+            PdfState::Loaded(loaded) => Some(&loaded.path),
+            PdfState::Loading(loading) => Some(&loading.path),
+            PdfState::Failed { path, .. } => Some(path),
+            PdfState::None => None,
+        }
+    }
+
+    /// The text of every page: extracted, or given to `load` if it's still loading or
+    /// couldn't be opened.
+    pub fn page_texts(&self) -> Option<&[PageText]> {
+        match &self.state {
+            PdfState::Loaded(loaded) => loaded.page_texts(),
+            PdfState::Loading(loading) => loading.page_texts.as_deref(),
+            PdfState::Failed { page_texts, .. } => page_texts.as_deref(),
+            PdfState::None => None,
+        }
+    }
+
+    /// Loads the file again if it couldn't be opened, with the text it was given.
+    pub fn retry(&mut self, cx: &mut Context<Self>) {
+        if !matches!(self.state, PdfState::Failed { .. }) {
+            return;
+        }
+        if let PdfState::Failed {
+            path, page_texts, ..
+        } = std::mem::replace(&mut self.state, PdfState::None)
+        {
+            self.load(path, page_texts, cx);
+        }
     }
 
     /// Closes the document, cancelling any load or rendering in progress.
@@ -232,7 +292,14 @@ impl PdfDocument {
         cx.notify();
     }
 
-    fn start_loading(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+    /// Starts loading the PDF at `path`, replacing the open one. The text of its pages
+    /// is extracted once it's loaded, unless `page_texts` gives it already.
+    pub fn load(
+        &mut self,
+        path: PathBuf,
+        page_texts: Option<Vec<PageText>>,
+        cx: &mut Context<Self>,
+    ) {
         let task = cx.spawn({
             let path = path.clone();
             async move |this, app| {
@@ -245,25 +312,58 @@ impl PdfDocument {
                     .await;
 
                 // Rendering pages starts once the UI reports which ones are visible.
-                this.update(app, |this, cx| match result {
-                    Ok(data) => {
-                        let page_count = data.page_sizes.len();
-                        this.set_state(PdfState::Loaded(LoadedPdf::new(data)), cx);
-                        let job = this.start_thumbnails((0..page_count).collect(), cx);
-                        if let PdfState::Loaded(loaded) = &mut this.state {
-                            loaded.thumbnail_job = job;
+                this.update(app, |this, cx| {
+                    let page_texts = match &mut this.state {
+                        PdfState::Loading(loading) => loading.page_texts.take(),
+                        _ => None,
+                    };
+                    match result {
+                        Ok(data) => {
+                            let page_count = data.page_sizes.len();
+                            let mut loaded = LoadedPdf::new(path, data);
+                            // Texts saved for a different version of the file are
+                            // extracted again.
+                            loaded.page_texts =
+                                page_texts.filter(|texts| texts.len() == page_count);
+                            let extract_text = loaded.page_texts.is_none();
+                            this.set_state(PdfState::Loaded(Box::new(loaded)), cx);
+                            let thumbnail_job =
+                                this.start_thumbnails((0..page_count).collect(), cx);
+                            let text_job = if extract_text {
+                                this.start_text_extraction(cx)
+                            } else {
+                                None
+                            };
+                            if let PdfState::Loaded(loaded) = &mut this.state {
+                                loaded.thumbnail_job = thumbnail_job;
+                                loaded.text_job = text_job;
+                            }
                         }
-                    }
-                    Err(err) => {
-                        let error = format!("{err:#}");
-                        this.set_state(PdfState::Failed { path, error }, cx);
+                        Err(err) => {
+                            let error = format!("{err:#}");
+                            this.set_state(
+                                PdfState::Failed {
+                                    path,
+                                    error,
+                                    page_texts,
+                                },
+                                cx,
+                            );
+                        }
                     }
                 })
                 .ok();
             }
         });
 
-        self.set_state(PdfState::Loading(LoadingPdf { path, _task: task }), cx);
+        self.set_state(
+            PdfState::Loading(LoadingPdf {
+                path,
+                page_texts,
+                _task: task,
+            }),
+            cx,
+        );
     }
 
     /// Starts rendering the pages near the visible ones that don't have an image at
@@ -394,6 +494,44 @@ impl PdfDocument {
         })
     }
 
+    /// Starts extracting the text of all pages in the background. The caller keeps
+    /// the returned job alive until it's done.
+    fn start_text_extraction(&mut self, cx: &mut Context<Self>) -> Option<Job> {
+        let PdfState::Loaded(loaded) = &self.state else {
+            return None;
+        };
+        let pdf = loaded.data.pdf.clone();
+        let cancelled = Arc::new(AtomicBool::new(false));
+
+        let task = cx.spawn({
+            let cancelled = cancelled.clone();
+            async move |this, app| {
+                let texts = app
+                    .background_executor()
+                    .spawn(async move { extract_text(&pdf, &cancelled) })
+                    .await;
+                let Some(texts) = texts else {
+                    return;
+                };
+                this.update(app, |this, cx| {
+                    // Replacing or closing the document drops the job, so this is
+                    // the text of the loaded document.
+                    if let PdfState::Loaded(loaded) = &mut this.state {
+                        loaded.page_texts = Some(texts);
+                        loaded.text_job = None;
+                        cx.notify();
+                    }
+                })
+                .ok();
+            }
+        });
+
+        Some(Job {
+            cancelled,
+            _task: task,
+        })
+    }
+
     fn insert_thumbnail(
         &mut self,
         ix: usize,
@@ -441,22 +579,4 @@ impl PdfDocument {
 
 fn same_scale(a: f32, b: f32) -> bool {
     (a - b).abs() < 0.001
-}
-
-/// Asks the user for a PDF file and starts loading it into `document`.
-pub fn open_pdf(document: Entity<PdfDocument>, cx: &mut App) {
-    cx.spawn(async move |app| {
-        let selected_file = AsyncFileDialog::new()
-            .add_filter("pdf", &["pdf"])
-            .pick_file()
-            .await;
-
-        let Some(file) = selected_file else {
-            return;
-        };
-
-        let path = file.path().to_path_buf();
-        app.update_entity(&document, |document, cx| document.start_loading(path, cx));
-    })
-    .detach();
 }

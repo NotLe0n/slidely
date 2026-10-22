@@ -1,17 +1,23 @@
 //! Loading video files for playback. Nothing in here renders UI.
 
-use std::path::PathBuf;
+mod transcribe;
+
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
-use gpui_kit::{App, AppContext as _, Context, Entity, Task};
+use futures::StreamExt as _;
+use gpui_kit::{Context, Task};
 use gpui_video_player::{Url, Video};
-use rfd::AsyncFileDialog;
 
-const VIDEO_EXTENSIONS: &[&str] = &["mp4", "mkv", "webm", "mov", "avi", "m4v", "ogv"];
+use transcribe::Progress;
+pub use transcribe::{Segment, Stage};
+
+pub const VIDEO_EXTENSIONS: &[&str] = &["mp4", "mkv", "webm", "mov", "avi", "m4v", "ogv"];
 /// Playback speeds offered in the speed menus.
 pub const PLAYBACK_SPEEDS: &[f64] = &[0.25, 0.5, 0.75, 1., 1.25, 1.5, 2.];
 
-/// The open video, shared between the UI and the `OpenVideo` action.
+/// One of the project's videos.
 pub struct VideoDocument {
     state: VideoState,
 }
@@ -23,19 +29,63 @@ pub enum VideoState {
     Failed {
         path: PathBuf,
         error: String,
+        /// The transcript given to `load`, kept so it's saved and used when it's
+        /// retried.
+        transcript: Option<Vec<Segment>>,
     },
     None,
 }
 
 pub struct LoadingVideo {
     pub path: PathBuf,
+    /// The transcript given to `load`, kept here so it's saved while the video loads.
+    /// Without one, it's queued for transcription once it's loaded.
+    transcript: Option<Vec<Segment>>,
     /// Dropping it discards the load.
     _task: Task<()>,
 }
 
 pub struct LoadedVideo {
+    pub path: PathBuf,
     /// Playback handle; dropping the last clone stops the pipeline.
     pub video: Video,
+    pub transcript: TranscriptState,
+}
+
+pub enum TranscriptState {
+    None,
+    /// Waiting for the transcriptions of other videos to finish; only one runs at a
+    /// time. The project starts it.
+    Queued,
+    Running(RunningTranscription),
+    Done(Vec<Segment>),
+    Failed(String),
+}
+
+pub struct RunningTranscription {
+    progress: Arc<Progress>,
+    /// The segments transcribed so far, in order.
+    segments: Vec<Segment>,
+    /// Dropping them discards the transcription.
+    _tasks: [Task<()>; 2],
+}
+
+impl RunningTranscription {
+    pub fn stage(&self) -> Stage {
+        self.progress.stage()
+    }
+
+    /// Progress of the current stage in percent, if it has any.
+    pub fn percent(&self) -> Option<u8> {
+        self.progress.percent()
+    }
+}
+
+impl Drop for RunningTranscription {
+    fn drop(&mut self) {
+        // The transcription runs on its own thread, which dropping the task doesn't stop.
+        self.progress.cancel();
+    }
 }
 
 impl VideoDocument {
@@ -53,6 +103,78 @@ impl VideoDocument {
         matches!(self.state, VideoState::Loaded(_))
     }
 
+    /// The transcription's state, once the video is loaded.
+    pub fn transcript(&self) -> Option<&TranscriptState> {
+        match &self.state {
+            VideoState::Loaded(loaded) => Some(&loaded.transcript),
+            _ => None,
+        }
+    }
+
+    pub fn is_transcribing(&self) -> bool {
+        matches!(self.transcript(), Some(TranscriptState::Running(_)))
+    }
+
+    /// Whether its transcription is waiting to be started.
+    pub fn is_queued(&self) -> bool {
+        matches!(self.transcript(), Some(TranscriptState::Queued))
+    }
+
+    /// Whether it's queued for transcription, or will be once it's loaded.
+    pub fn awaits_transcription(&self) -> bool {
+        match &self.state {
+            VideoState::Loading(loading) => loading.transcript.is_none(),
+            _ => self.is_queued(),
+        }
+    }
+
+    /// Stops playback.
+    pub fn pause(&mut self, cx: &mut Context<Self>) {
+        if let VideoState::Loaded(loaded) = &self.state
+            && !loaded.video.paused()
+        {
+            loaded.video.set_paused(true);
+            cx.notify();
+        }
+    }
+
+    /// The video file that's open, loading, or failed to open.
+    pub fn path(&self) -> Option<&Path> {
+        match &self.state {
+            VideoState::Loaded(loaded) => Some(&loaded.path),
+            VideoState::Loading(loading) => Some(&loading.path),
+            VideoState::Failed { path, .. } => Some(path),
+            VideoState::None => None,
+        }
+    }
+
+    /// The transcript, once the transcription is done, or the one given to `load` if
+    /// it's still loading or couldn't be opened.
+    pub fn finished_transcript(&self) -> Option<&[Segment]> {
+        match &self.state {
+            VideoState::Loaded(LoadedVideo {
+                transcript: TranscriptState::Done(segments),
+                ..
+            }) => Some(segments),
+            VideoState::Loaded(_) | VideoState::None => None,
+            VideoState::Loading(loading) => loading.transcript.as_deref(),
+            VideoState::Failed { transcript, .. } => transcript.as_deref(),
+        }
+    }
+
+    /// Loads the file again if it couldn't be opened, with the transcript it was given.
+    pub fn retry(&mut self, cx: &mut Context<Self>) {
+        if !matches!(self.state, VideoState::Failed { .. }) {
+            return;
+        }
+        if let VideoState::Failed {
+            path, transcript, ..
+        } = std::mem::replace(&mut self.state, VideoState::None)
+        {
+            self.load(path, transcript, cx);
+        }
+    }
+
     /// Closes the video, cancelling any load in progress.
     pub fn close(&mut self, cx: &mut Context<Self>) {
         self.set_state(VideoState::None, cx);
@@ -64,7 +186,14 @@ impl VideoDocument {
         cx.notify();
     }
 
-    fn start_loading(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+    /// Starts loading the video at `path`, replacing the open one. Its speech is
+    /// queued for transcription once it's loaded, unless its `transcript` is given.
+    pub fn load(
+        &mut self,
+        path: PathBuf,
+        transcript: Option<Vec<Segment>>,
+        cx: &mut Context<Self>,
+    ) {
         let task = cx.spawn({
             let path = path.clone();
             async move |this, app| {
@@ -85,19 +214,38 @@ impl VideoDocument {
                     })
                     .await;
 
-                let new_state = match result {
-                    Ok(video) => VideoState::Loaded(LoadedVideo { video }),
-                    Err(err) => VideoState::Failed {
-                        path,
-                        error: format!("{err:#}"),
-                    },
-                };
-                this.update(app, |this, cx| this.set_state(new_state, cx))
-                    .ok();
+                this.update(app, |this, cx| {
+                    let transcript = match &mut this.state {
+                        VideoState::Loading(loading) => loading.transcript.take(),
+                        _ => None,
+                    };
+                    let new_state = match result {
+                        Ok(video) => VideoState::Loaded(LoadedVideo {
+                            path,
+                            video,
+                            transcript: transcript
+                                .map_or(TranscriptState::Queued, TranscriptState::Done),
+                        }),
+                        Err(err) => VideoState::Failed {
+                            path,
+                            error: format!("{err:#}"),
+                            transcript,
+                        },
+                    };
+                    this.set_state(new_state, cx);
+                })
+                .ok();
             }
         });
 
-        self.set_state(VideoState::Loading(LoadingVideo { path, _task: task }), cx);
+        self.set_state(
+            VideoState::Loading(LoadingVideo {
+                path,
+                transcript,
+                _task: task,
+            }),
+            cx,
+        );
     }
 }
 
@@ -133,20 +281,128 @@ impl VideoDocument {
     }
 }
 
-/// Asks the user for a video file and starts loading it into `document`.
-pub fn open_video(document: Entity<VideoDocument>, cx: &mut App) {
-    cx.spawn(async move |app| {
-        let selected_file = AsyncFileDialog::new()
-            .add_filter("video", VIDEO_EXTENSIONS)
-            .pick_file()
-            .await;
+impl VideoDocument {
+    /// Queues the video for transcription if it isn't transcribed, e.g. after it was
+    /// stopped or failed. A finished transcript is kept.
+    pub fn queue_transcription(&mut self, cx: &mut Context<Self>) {
+        if let VideoState::Loaded(loaded) = &self.state
+            && matches!(
+                loaded.transcript,
+                TranscriptState::None | TranscriptState::Failed(_)
+            )
+        {
+            self.set_transcript(TranscriptState::Queued, cx);
+        }
+    }
 
-        let Some(file) = selected_file else {
+    /// Starts transcribing the video's speech if it's queued. The project calls this
+    /// when it's the video's turn.
+    pub fn start_transcription(&mut self, cx: &mut Context<Self>) {
+        let VideoState::Loaded(loaded) = &mut self.state else {
             return;
         };
+        if !matches!(loaded.transcript, TranscriptState::Queued) {
+            return;
+        }
 
-        let path = file.path().to_path_buf();
-        app.update_entity(&document, |document, cx| document.start_loading(path, cx));
-    })
-    .detach();
+        let progress = Arc::new(Progress::default());
+        let (segment_sender, mut segment_receiver) = futures::channel::mpsc::unbounded();
+        let (result_sender, result_receiver) = futures::channel::oneshot::channel();
+        // It runs for minutes, so it gets its own thread rather than blocking one of
+        // the executor's.
+        std::thread::spawn({
+            let path = loaded.path.clone();
+            let progress = progress.clone();
+            move || {
+                let result = transcribe::transcribe(&path, progress, |segments| {
+                    segment_sender.unbounded_send(segments).ok();
+                });
+                result_sender.send(result).ok()
+            }
+        });
+
+        let result_task = cx.spawn(async move |this, app| {
+            // Ends once the transcription is done, which drops the sender.
+            while let Some(segments) = segment_receiver.next().await {
+                let added = this.update(app, |this, cx| this.add_segments(segments, cx));
+                if added.is_err() {
+                    return;
+                }
+            }
+            let transcript = match result_receiver.await {
+                Ok(Ok(segments)) => TranscriptState::Done(segments),
+                Ok(Err(err)) => TranscriptState::Failed(format!("{err:#}")),
+                Err(_) => TranscriptState::Failed("transcription crashed".into()),
+            };
+            this.update(app, |this, cx| this.set_transcript(transcript, cx))
+                .ok();
+        });
+        // Redraws regularly so the progress shown stays current.
+        let progress_task = cx.spawn(async move |this, app| {
+            loop {
+                app.background_executor()
+                    .timer(Duration::from_millis(250))
+                    .await;
+                if this.update(app, |_, cx| cx.notify()).is_err() {
+                    return;
+                }
+            }
+        });
+
+        self.set_transcript(
+            TranscriptState::Running(RunningTranscription {
+                progress,
+                segments: Vec::new(),
+                _tasks: [result_task, progress_task],
+            }),
+            cx,
+        );
+    }
+
+    /// Stops a running transcription, or takes the video out of the queue.
+    pub fn cancel_transcription(&mut self, cx: &mut Context<Self>) {
+        if let VideoState::Loaded(loaded) = &self.state
+            && matches!(
+                loaded.transcript,
+                TranscriptState::Queued | TranscriptState::Running(_)
+            )
+        {
+            self.set_transcript(TranscriptState::None, cx);
+        }
+    }
+
+    /// Shows the segments of a running transcription as they come in.
+    fn add_segments(&mut self, segments: Vec<Segment>, cx: &mut Context<Self>) {
+        if let VideoState::Loaded(loaded) = &mut self.state
+            && let TranscriptState::Running(running) = &mut loaded.transcript
+        {
+            running.segments.extend(segments);
+            cx.notify();
+        }
+    }
+
+    fn set_transcript(&mut self, transcript: TranscriptState, cx: &mut Context<Self>) {
+        if let VideoState::Loaded(loaded) = &mut self.state {
+            loaded.transcript = transcript;
+            cx.notify();
+        }
+    }
+}
+
+impl TranscriptState {
+    /// The segments transcribed so far, in order.
+    pub fn segments(&self) -> &[Segment] {
+        match self {
+            TranscriptState::Running(running) => &running.segments,
+            TranscriptState::Done(segments) => segments,
+            TranscriptState::None | TranscriptState::Queued | TranscriptState::Failed(_) => &[],
+        }
+    }
+
+    /// The segment being spoken at `time`, if any.
+    pub fn segment_at(&self, time: Duration) -> Option<&Segment> {
+        let segments = self.segments();
+        let ix = segments.partition_point(|segment| segment.start <= time);
+        segments[..ix].last().filter(|segment| time < segment.end)
+    }
 }
