@@ -6,9 +6,9 @@ use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use super::observe::ObservedDocuments;
 use super::placeholders::file_name;
 use super::video_view::progress_label;
+use crate::observe::ObservedDocuments;
 use crate::pdf::{PdfDocument, PdfState};
 use crate::project::{Project, add_pdfs, add_videos};
 use crate::video::{TranscriptState, VideoDocument, VideoState};
@@ -66,10 +66,10 @@ impl ManageProjectView {
 
     /// Observes the project's current files, after one was added or removed.
     fn observe_documents(&mut self, cx: &mut Context<Self>) {
-        self.pdfs
-            .observe(&self.project, Project::pdfs, cx, |_, cx| cx.notify());
-        self.videos
-            .observe(&self.project, Project::videos, cx, |_, cx| cx.notify());
+        let project = self.project.read(cx);
+        let (pdfs, videos) = (project.pdfs().to_vec(), project.videos().to_vec());
+        self.pdfs.observe(&pdfs, cx, |_, cx| cx.notify());
+        self.videos.observe(&videos, cx, |_, cx| cx.notify());
     }
 
     /// Copied out so the documents aren't borrowed while building the list.

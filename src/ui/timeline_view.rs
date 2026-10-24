@@ -5,8 +5,8 @@ use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use super::observe::ObservedDocuments;
 use super::placeholders::page_image;
+use crate::observe::ObservedDocuments;
 use crate::pdf::{PdfDocument, PdfState};
 use crate::project::Project;
 
@@ -26,6 +26,10 @@ struct TimelinePage {
     thumbnail: Option<Arc<RenderImage>>,
     /// The first page of a PDF other than the first one.
     starts_pdf: bool,
+    /// Whether it's discussed in the videos, as far as they're transcribed.
+    discussed: bool,
+    /// Whether it's discussed at the playback position of the video shown.
+    current: bool,
 }
 
 /// The pages of the project's PDFs as one strip of thumbnails.
@@ -53,13 +57,15 @@ impl TimelineView {
 
     /// Observes the project's current PDFs, after one was added or removed.
     fn observe_documents(&mut self, cx: &mut Context<Self>) {
-        self.pdfs
-            .observe(&self.project, Project::pdfs, cx, |_, cx| cx.notify());
+        let pdfs = self.project.read(cx).pdfs().to_vec();
+        self.pdfs.observe(&pdfs, cx, |_, cx| cx.notify());
     }
 
     /// Copied out so the documents aren't borrowed while building the strip.
     fn pages(&self, cx: &App) -> Vec<TimelinePage> {
-        let slides = self.project.read(cx).slides(cx);
+        let project = self.project.read(cx);
+        let slides = project.slides(cx);
+        let current = project.current_slide(cx);
         let mut pages = Vec::with_capacity(slides.len());
         for (ix, (document, range)) in slides.documents.iter().enumerate() {
             let PdfState::Loaded(pdf) = document.read(cx).state() else {
@@ -71,6 +77,8 @@ impl TimelineView {
                     aspect_ratio: size.width / size.height,
                     thumbnail: pdf.thumbnail(page).cloned(),
                     starts_pdf: page == 0 && ix > 0,
+                    discussed: project.is_discussed(slide),
+                    current: current == Some(slide),
                 }
             }));
         }
@@ -78,8 +86,10 @@ impl TimelineView {
     }
 
     /// One thumbnail per page, scrolling horizontally; clicking one jumps to its
-    /// page.
+    /// page, and to where it's discussed in the videos. Once any page is found in
+    /// them, those that aren't are dimmed.
     fn timeline(&self, pages: Vec<TimelinePage>, cx: &mut Context<Self>) -> Div {
+        let any_discussed = pages.iter().any(|page| page.discussed);
         let thumbnails = pages.into_iter().enumerate().map(|(ix, page)| {
             let thumbnail = div()
                 .id(("thumbnail", ix))
@@ -90,6 +100,12 @@ impl TimelineView {
                 .h(THUMBNAIL_HEIGHT)
                 .border_1()
                 .border_color(cx.theme().border)
+                .when(page.current, |thumbnail| {
+                    thumbnail.border_2().border_color(cx.theme().primary)
+                })
+                .when(any_discussed && !page.discussed, |thumbnail| {
+                    thumbnail.opacity(0.4)
+                })
                 .rounded(cx.theme().radius)
                 .overflow_hidden()
                 .child(page_image(page.thumbnail));

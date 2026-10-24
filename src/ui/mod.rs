@@ -1,8 +1,9 @@
 //! The window's views.
 
 mod app_view;
+mod controls;
+mod follow;
 mod manage_project;
-mod observe;
 mod pdf_controls;
 mod pdf_view;
 mod placeholders;

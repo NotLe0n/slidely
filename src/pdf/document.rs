@@ -130,11 +130,6 @@ impl LoadedPdf {
         self.thumbnails.get(ix)?.as_ref()
     }
 
-    /// The text of page `ix`, once it's extracted.
-    pub fn page_text(&self, ix: usize) -> Option<&PageText> {
-        self.page_texts.as_ref()?.get(ix)
-    }
-
     /// The text of every page, once it's extracted.
     pub fn page_texts(&self) -> Option<&[PageText]> {
         self.page_texts.as_deref()

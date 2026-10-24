@@ -58,6 +58,13 @@ struct SegmentEntry {
     text: String,
 }
 
+impl Default for ProjectFile {
+    /// No PDFs or videos.
+    fn default() -> Self {
+        Self::new(Vec::new(), Vec::new())
+    }
+}
+
 impl ProjectFile {
     pub fn new(pdfs: Vec<PdfEntry>, videos: Vec<VideoEntry>) -> Self {
         Self {

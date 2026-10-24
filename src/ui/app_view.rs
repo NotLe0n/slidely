@@ -7,7 +7,7 @@ use gpui_kit::component::tab::{Tab, TabBar};
 use gpui_kit::component::*;
 use gpui_kit::*;
 
-use super::observe::ObservedDocuments;
+use super::follow::SlideFollower;
 use super::pdf_view::PdfView;
 use super::placeholders::{empty_screen, file_name};
 use super::timeline_view::{TimelineEvent, TimelineView};
@@ -17,6 +17,7 @@ use crate::menus::{
     self, FitPage, MenuState, ResetZoom, RotatePageClockwise, SetPlaybackSpeed, ToggleMute,
     TogglePlayback, ZoomIn, ZoomOut,
 };
+use crate::observe::ObservedDocuments;
 use crate::pdf::PdfDocument;
 use crate::project::{Project, ProjectEvent, add_videos, open_project};
 use crate::video::VideoDocument;
@@ -35,6 +36,8 @@ pub struct SlidelyUi {
     timeline_view: Entity<TimelineView>,
     /// The menus depend on whether the PDFs are loaded.
     pdfs: ObservedDocuments<PdfDocument>,
+    /// Keeps the slides and the video in step.
+    _follower: Entity<SlideFollower>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -49,6 +52,7 @@ impl SlidelyUi {
     pub fn new(project: Entity<Project>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let pdf_view = cx.new(|cx| PdfView::new(project.clone(), window, cx));
         let timeline_view = cx.new(|cx| TimelineView::new(project.clone(), cx));
+        let _follower = cx.new(|cx| SlideFollower::new(project.clone(), pdf_view.clone(), cx));
 
         let _subscriptions = vec![
             cx.observe(&project, |this, _, cx| {
@@ -67,9 +71,12 @@ impl SlidelyUi {
                 }
             }),
             cx.subscribe(&timeline_view, |this, _, event, cx| match event {
-                TimelineEvent::PageClicked(ix) => this
-                    .pdf_view
-                    .update(cx, |pdf_view, cx| pdf_view.scroll_to_page(*ix, cx)),
+                TimelineEvent::PageClicked(ix) => {
+                    this.pdf_view
+                        .update(cx, |pdf_view, cx| pdf_view.scroll_to_page(*ix, cx));
+                    this.project
+                        .update(cx, |project, cx| project.play_slide(*ix, cx));
+                }
             }),
             cx.observe_global::<Settings>(|_, cx| cx.notify()),
         ];
@@ -85,16 +92,16 @@ impl SlidelyUi {
             video_panels: Vec::new(),
             timeline_view,
             pdfs: ObservedDocuments::new(),
+            _follower,
             _subscriptions,
         }
     }
 
     /// Observes the project's current PDFs, after one was added or removed.
     fn observe_documents(&mut self, cx: &mut Context<Self>) {
+        let pdfs = self.project.read(cx).pdfs().to_vec();
         self.pdfs
-            .observe(&self.project, Project::pdfs, cx, |this, cx| {
-                this.update_menus(cx)
-            });
+            .observe(&pdfs, cx, |this, cx| this.update_menus(cx));
     }
 
     /// Creates the views of videos added to the project and drops those of removed
@@ -129,8 +136,7 @@ impl SlidelyUi {
                 let document = document.clone();
                 move |this, _, event, cx| match event {
                     VideoViewEvent::Remove => this.project.update(cx, |project, cx| {
-                        let videos = project.videos();
-                        if let Some(ix) = videos.iter().position(|video| *video == document) {
+                        if let Some(ix) = project.video_index(&document) {
                             project.remove_video(ix, cx);
                         }
                     }),

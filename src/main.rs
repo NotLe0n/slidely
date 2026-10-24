@@ -1,5 +1,8 @@
+mod align;
 mod assets;
+mod interval;
 mod menus;
+mod observe;
 mod pdf;
 mod project;
 mod ui;
@@ -11,12 +14,27 @@ use gpui_kit::*;
 use project::{Project, confirm_discard};
 use ui::SlidelyUi;
 
+#[derive(Clone, Copy)]
 struct Settings {
     pdf_view_visible: bool,
     video_view_visible: bool,
+    /// Whether scrolling to a page seeks the video to where it's discussed.
+    video_follows_slides: bool,
+    /// Whether seeking the video scrolls to the slide discussed there.
+    slides_follow_video: bool,
 }
 
 impl Global for Settings {}
+
+impl Settings {
+    /// Flips the setting `field` picks.
+    fn toggle(cx: &mut App, field: fn(&mut Settings) -> &mut bool) {
+        cx.update_global::<Settings, _>(|settings, _| {
+            let value = field(settings);
+            *value = !*value;
+        });
+    }
+}
 
 fn main() {
     gpui_kit::application()
@@ -27,6 +45,8 @@ fn main() {
             cx.set_global(Settings {
                 pdf_view_visible: true,
                 video_view_visible: true,
+                video_follows_slides: false,
+                slides_follow_video: false,
             });
 
             let project = cx.new(|_| Project::new());

@@ -8,9 +8,9 @@ use gpui_kit::*;
 // Not the component size (small, medium, ...) from the glob above.
 use gpui_kit::Size;
 
-use super::observe::ObservedDocuments;
 use super::pdf_controls::{PdfControlsBar, PdfControlsBarEvent};
 use super::placeholders::{empty_screen, file_name, page_image};
+use crate::observe::ObservedDocuments;
 use crate::pdf::{PX_PER_POINT, PdfDocument, PdfState};
 use crate::project::{Project, Slides, add_pdfs};
 
@@ -30,6 +30,12 @@ const ZOOM_PER_WHEEL_LINE: f32 = 1.04;
 /// Converts pixel-based wheel deltas (touchpads) to lines.
 const WHEEL_LINE_HEIGHT: Pixels = px(20.);
 
+pub enum PdfViewEvent {
+    /// The user scrolled to the page at this index of the project's slides, i.e. it's
+    /// in the middle of the viewport now. Not emitted for `scroll_to_page`.
+    PageChanged(usize),
+}
+
 /// The pages of all of the project's PDFs, one PDF after the other as if they were
 /// one. Pages are in a virtual list so only the visible ones are laid out, and only
 /// those (plus a few around them) are rendered by their documents.
@@ -45,6 +51,11 @@ pub struct PdfView {
     shown_documents: Vec<Entity<PdfDocument>>,
     /// Where the top of the viewport was last frame.
     scroll_anchor: Option<ScrollAnchor>,
+    /// The page in the middle of the viewport last frame.
+    reported_page: Option<usize>,
+    /// Set by `scroll_to_page` until the scroll is done, so the page it lands on
+    /// isn't reported as the user scrolling there.
+    scrolling_to_page: bool,
     focus_handle: FocusHandle,
     _subscriptions: Vec<Subscription>,
 }
@@ -78,6 +89,8 @@ impl PdfView {
             scroll_handle: VirtualListScrollHandle::new(),
             shown_documents: Vec::new(),
             scroll_anchor: None,
+            reported_page: None,
+            scrolling_to_page: false,
             focus_handle: cx.focus_handle(),
             _subscriptions,
         };
@@ -87,8 +100,8 @@ impl PdfView {
 
     /// Observes the project's current PDFs, after one was added or removed.
     fn observe_documents(&mut self, cx: &mut Context<Self>) {
-        self.pdfs
-            .observe(&self.project, Project::pdfs, cx, |_, cx| cx.notify());
+        let pdfs = self.project.read(cx).pdfs().to_vec();
+        self.pdfs.observe(&pdfs, cx, |_, cx| cx.notify());
     }
 
     fn slides(&self, cx: &App) -> Slides {
@@ -98,7 +111,23 @@ impl PdfView {
     /// Scrolls so page `ix` is at the top of the viewport.
     pub fn scroll_to_page(&mut self, ix: usize, cx: &mut Context<Self>) {
         self.scroll_handle.scroll_to_item(ix, ScrollStrategy::Top);
+        self.scrolling_to_page = true;
         cx.notify();
+    }
+
+    /// Emits `PageChanged` if the page in the middle of the viewport changed since
+    /// last frame, other than by `scroll_to_page`. Called while the list is laid out,
+    /// after it applied a scroll to a page.
+    fn track_current_page(&mut self, cx: &mut Context<Self>) {
+        let page = self.current_page(cx);
+        let changed = page != self.reported_page;
+        self.reported_page = page;
+        if std::mem::take(&mut self.scrolling_to_page) {
+            return;
+        }
+        if changed && let Some(page) = page {
+            cx.emit(PdfViewEvent::PageChanged(page));
+        }
     }
 
     pub fn zoom_in(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -216,7 +245,7 @@ impl PdfView {
     }
 
     /// The index of the page in the middle of the viewport.
-    fn current_page(&self, cx: &App) -> Option<usize> {
+    pub fn current_page(&self, cx: &App) -> Option<usize> {
         let viewport = self.scroll_handle.bounds().size;
         let center_y = -self.scroll_handle.offset().y + viewport.height / 2.;
         page_at(&self.slides(cx).sizes, self.display_scale(), center_y)
@@ -373,6 +402,7 @@ impl PdfView {
                 if range.start < page_count {
                     let visible = range.start..range.end.min(page_count);
                     this.report_visible(&slides, visible, cx);
+                    this.track_current_page(cx);
                 }
 
                 range
@@ -474,6 +504,8 @@ impl PdfView {
         }
     }
 }
+
+impl EventEmitter<PdfViewEvent> for PdfView {}
 
 impl Render for PdfView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {

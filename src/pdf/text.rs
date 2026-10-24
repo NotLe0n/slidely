@@ -40,24 +40,25 @@ pub struct TextLine {
 }
 
 impl PageText {
-    /// All of the text, a line per line.
-    pub fn text(&self) -> String {
-        let lines: Vec<_> = self.lines.iter().map(|line| line.text.as_str()).collect();
-        lines.join("\n")
-    }
-
     /// The slide's title: its first line in the largest font.
+    #[cfg(test)]
     pub fn title(&self) -> Option<&str> {
-        let largest = self
-            .lines
-            .iter()
-            .map(|line| line.font_size)
-            .fold(0., f32::max);
-        self.lines
-            .iter()
-            .find(|line| line.font_size >= largest * 0.95)
-            .map(|line| line.text.as_str())
+        let ix = title_index(&self.lines)?;
+        Some(&self.lines[ix].text)
     }
+}
+
+/// Lines in at least this fraction of the largest font size count as being in it, so
+/// a title isn't missed for being a little smaller than e.g. a symbol in it.
+const TITLE_FONT_FRACTION: f32 = 0.95;
+
+/// Which of a slide's lines is its title: the first one in the largest font.
+pub fn title_index<'a>(lines: impl IntoIterator<Item = &'a TextLine>) -> Option<usize> {
+    let sizes: Vec<f32> = lines.into_iter().map(|line| line.font_size).collect();
+    let largest = sizes.iter().copied().fold(0., f32::max);
+    sizes
+        .iter()
+        .position(|&size| size >= largest * TITLE_FONT_FRACTION)
 }
 
 /// Extracts the text of every page of `pdf` on rayon's thread pool. Blocking; run it

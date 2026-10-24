@@ -1,11 +1,9 @@
-//! Observing each of the project's documents from a view.
+//! Observing each document in a list, e.g. the project's PDFs.
 
 use gpui_kit::*;
 
-use crate::project::Project;
-
-/// Subscriptions to each document in one of the project's lists, e.g. its PDFs. They're
-/// only renewed when the list changes, not on every change to the project.
+/// Subscriptions to each document in a list. They're only renewed when the list
+/// changes, not every time it's passed again.
 pub struct ObservedDocuments<T> {
     documents: Vec<Entity<T>>,
     _subscriptions: Vec<Subscription>,
@@ -19,17 +17,14 @@ impl<T: 'static> ObservedDocuments<T> {
         }
     }
 
-    /// Calls `on_change` whenever one of the documents `list` picks from `project`
-    /// changes. Call it again when the project changes, to catch documents being
-    /// added, removed or moved.
+    /// Calls `on_change` whenever one of `documents` changes. Call it again when the
+    /// list may have changed, to catch documents being added, removed or moved.
     pub fn observe<V: 'static>(
         &mut self,
-        project: &Entity<Project>,
-        list: fn(&Project) -> &[Entity<T>],
+        documents: &[Entity<T>],
         cx: &mut Context<V>,
         on_change: impl Fn(&mut V, &mut Context<V>) + Clone + 'static,
     ) {
-        let documents = list(project.read(cx));
         if documents == self.documents.as_slice() {
             return;
         }
@@ -42,5 +37,11 @@ impl<T: 'static> ObservedDocuments<T> {
                 cx.observe(document, move |view, _, cx| on_change(view, cx))
             })
             .collect();
+    }
+
+    /// Stops observing the documents.
+    pub fn clear(&mut self) {
+        self.documents.clear();
+        self._subscriptions.clear();
     }
 }

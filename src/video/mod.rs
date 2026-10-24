@@ -2,6 +2,7 @@
 
 mod transcribe;
 
+use std::cell::Cell;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -9,6 +10,8 @@ use std::time::Duration;
 use futures::StreamExt as _;
 use gpui_kit::{Context, Task};
 use gpui_video_player::{Url, Video};
+use gstreamer::ClockTime;
+use gstreamer::prelude::*;
 
 use transcribe::Progress;
 pub use transcribe::{Segment, Stage};
@@ -50,6 +53,8 @@ pub struct LoadedVideo {
     /// Playback handle; dropping the last clone stops the pipeline.
     pub video: Video,
     pub transcript: TranscriptState,
+    /// Where playback was last known to be, or is seeking to; see `position`.
+    last_position: Cell<Duration>,
 }
 
 pub enum TranscriptState {
@@ -162,6 +167,14 @@ impl VideoDocument {
         }
     }
 
+    /// The transcript so far, including one that's still running.
+    pub fn segments_so_far(&self) -> &[Segment] {
+        match self.transcript() {
+            Some(transcript) => transcript.segments(),
+            None => self.finished_transcript().unwrap_or_default(),
+        }
+    }
+
     /// Loads the file again if it couldn't be opened, with the transcript it was given.
     pub fn retry(&mut self, cx: &mut Context<Self>) {
         if !matches!(self.state, VideoState::Failed { .. }) {
@@ -223,6 +236,7 @@ impl VideoDocument {
                         Ok(video) => VideoState::Loaded(LoadedVideo {
                             path,
                             video,
+                            last_position: Cell::new(Duration::ZERO),
                             transcript: transcript
                                 .map_or(TranscriptState::Queued, TranscriptState::Done),
                         }),
@@ -250,6 +264,20 @@ impl VideoDocument {
 }
 
 impl VideoDocument {
+    /// The playback position. While a seek is in progress, GStreamer can't tell,
+    /// and `Video::position` says 0; this says where it's seeking to instead.
+    pub fn position(&self) -> Duration {
+        let VideoState::Loaded(loaded) = &self.state else {
+            return Duration::ZERO;
+        };
+        if let Some(position) = loaded.video.pipeline().query_position::<ClockTime>() {
+            loaded
+                .last_position
+                .set(Duration::from_nanos(position.nseconds()));
+        }
+        loaded.last_position.get()
+    }
+
     /// Jumps playback to `time`.
     pub fn seek(&mut self, time: Duration, cx: &mut Context<Self>) {
         let VideoState::Loaded(loaded) = &self.state else {
@@ -258,7 +286,8 @@ impl VideoDocument {
         if let Err(err) = loaded.video.seek(time, true) {
             eprintln!("Failed to seek video: {err}");
             return;
-        }
+        } 
+        loaded.last_position.set(time);
         cx.notify();
 
         // The player only redraws itself while playing. When paused, wait for the

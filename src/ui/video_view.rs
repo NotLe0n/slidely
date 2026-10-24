@@ -11,7 +11,9 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use gpui_video_player::{Video, video as video_element};
 
+use super::controls::setting_toggle;
 use super::placeholders::{failed_screen, loading_dialog};
+use crate::Settings;
 use crate::video::{PLAYBACK_SPEEDS, RunningTranscription, Stage, VideoDocument, VideoState};
 
 pub enum VideoViewEvent {
@@ -49,6 +51,8 @@ impl VideoView {
             cx.observe(&document, |_, _, cx| cx.notify()),
             cx.subscribe(&progress, Self::on_progress_event),
             cx.subscribe(&volume, Self::on_volume_event),
+            // Shows whether the slides follow the video.
+            cx.observe_global::<Settings>(|_, cx| cx.notify()),
         ];
         Self {
             document,
@@ -135,13 +139,19 @@ impl VideoView {
 
     /// Moves the sliders to match the video. A slider is only updated if its value
     /// changed, since updating it renders this view again.
-    fn sync_sliders(&mut self, video: &Video, window: &mut Window, cx: &mut Context<Self>) {
+    fn sync_sliders(
+        &mut self,
+        video: &Video,
+        position: Duration,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if !self.seeking {
             let duration = video.duration();
             let progress = if duration.is_zero() {
                 0.
             } else {
-                video.position().div_duration_f64(duration).clamp(0., 1.) as f32
+                position.div_duration_f64(duration).clamp(0., 1.) as f32
             };
             if self.progress.read(cx).value().start() != progress {
                 self.progress
@@ -164,7 +174,9 @@ impl VideoView {
     ) -> impl IntoElement {
         // While playing, the video element requests a frame each paint, which
         // renders this view again and so keeps the progress bar moving.
-        self.sync_sliders(&video, window, cx);
+        // Asking the pipeline where it is isn't free, so it's done once per frame.
+        let position = self.document.read(cx).position();
+        self.sync_sliders(&video, position, window, cx);
         let viewport = self.viewport.get();
 
         // Records the area's size each frame; if it changed (panel or window
@@ -208,18 +220,18 @@ impl VideoView {
                         )
                     }),
             )
-            .child(self.caption(&video, cx))
-            .child(self.progress_bar(&video, cx))
+            .child(self.caption(position, cx))
+            .child(self.progress_bar(&video, position, cx))
             .child(self.controls(&video, cx))
     }
 
     /// The transcript segment being spoken, once the video is transcribed.
-    fn caption(&self, video: &Video, cx: &mut Context<Self>) -> impl IntoElement {
+    fn caption(&self, position: Duration, cx: &mut Context<Self>) -> impl IntoElement {
         let text = self
             .document
             .read(cx)
             .transcript()
-            .and_then(|transcript| transcript.segment_at(video.position()))
+            .and_then(|transcript| transcript.segment_at(position))
             .map(|segment| segment.text.clone());
         div().when_some(text, |caption, text| {
             caption.px_4().pt_2().w_full().text_center().child(text)
@@ -227,7 +239,12 @@ impl VideoView {
     }
 
     /// The seek slider, between the elapsed and the total time.
-    fn progress_bar(&self, video: &Video, cx: &mut Context<Self>) -> impl IntoElement {
+    fn progress_bar(
+        &self,
+        video: &Video,
+        position: Duration,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let time_label = |time| {
             div()
                 .flex_none()
@@ -240,7 +257,7 @@ impl VideoView {
             .gap_3()
             .px_4()
             .pt_2()
-            .child(time_label(video.position()))
+            .child(time_label(position))
             .child(
                 div()
                     .flex_1()
@@ -249,7 +266,7 @@ impl VideoView {
             .child(time_label(video.duration()))
     }
 
-    /// Play/pause, volume and speed.
+    /// Play/pause, volume, following in the slides and speed.
     fn controls(&self, video: &Video, cx: &mut Context<Self>) -> impl IntoElement {
         let volume = video.volume();
         h_flex()
@@ -261,7 +278,19 @@ impl VideoView {
             .child(div().w(px(100.)).child(Slider::new(&self.volume)))
             .child(format!("{}%", (volume * 100.0).round()))
             .child(div().flex_1())
+            .child(self.slides_follow_button(cx))
             .child(self.speed_menu(video, cx))
+    }
+
+    /// Toggles whether seeking scrolls the slides to the one discussed there.
+    fn slides_follow_button(&self, cx: &mut Context<Self>) -> Button {
+        setting_toggle(
+            "slides-follow-video",
+            IconName::Presentation,
+            "Follow the video in the slides",
+            |settings| &mut settings.slides_follow_video,
+            cx,
+        )
     }
 
     fn playback_button(&self, video: &Video, cx: &mut Context<Self>) -> Button {

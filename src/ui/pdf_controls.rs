@@ -4,7 +4,9 @@ use gpui_kit::component::input::{InputEvent, InputState, NumberInput};
 use gpui_kit::component::*;
 use gpui_kit::*;
 
+use super::controls::setting_toggle;
 use super::pdf_view::{DEFAULT_ZOOM, MAX_ZOOM, MIN_ZOOM, ZOOM_STEP};
+use crate::Settings;
 
 pub enum PdfControlsBarEvent {
     /// The user entered this zoom level, clamped to the allowed range.
@@ -21,7 +23,7 @@ pub enum PdfControlsBarEvent {
 /// the zoom level; `PdfView` owns it.
 pub struct PdfControlsBar {
     input: Entity<InputState>,
-    _subscription: Subscription,
+    _subscriptions: Vec<Subscription>,
 }
 
 impl EventEmitter<PdfControlsBarEvent> for PdfControlsBar {}
@@ -36,11 +38,15 @@ impl PdfControlsBar {
                 .max(MAX_ZOOM as f64)
                 .validate(|text, _| text.chars().all(|c| c.is_ascii_digit()))
         });
-        let _subscription = cx.subscribe_in(&input, window, Self::on_input_event);
+        let _subscriptions = vec![
+            cx.subscribe_in(&input, window, Self::on_input_event),
+            // Shows whether the video follows the slides.
+            cx.observe_global::<Settings>(|_, cx| cx.notify()),
+        ];
 
         Self {
             input,
-            _subscription,
+            _subscriptions,
         }
     }
 
@@ -108,6 +114,16 @@ impl Render for PdfControlsBar {
                     .icon(IconName::RotateCw)
                     .tooltip("Rotate page clockwise")
                     .on_click(cx.listener(|_, _, _, cx| cx.emit(PdfControlsBarEvent::RotatePage))),
+            )
+            .child(
+                setting_toggle(
+                    "video-follows-slides",
+                    IconName::SquarePlay,
+                    "Seek the video to the page scrolled to",
+                    |settings| &mut settings.video_follows_slides,
+                    cx,
+                )
+                .small(),
             )
     }
 }

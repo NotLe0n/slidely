@@ -18,6 +18,7 @@ actions!(
     [Quit, NewProject, OpenProject, SaveProject, CloseProject]
 );
 actions!(slidely, [ManageProject, TogglePdfView, ToggleVideoView]);
+actions!(slidely, [ToggleVideoFollowsSlides, ToggleSlidesFollowVideo]);
 // Handled by the views, since they hold the zoom level and the playback controls.
 actions!(
     slidely,
@@ -99,14 +100,16 @@ pub fn init(project: Entity<Project>, cx: &mut App) {
         }
     });
     cx.on_action(|_: &TogglePdfView, cx| {
-        cx.update_global::<Settings, _>(|value, _| {
-            value.pdf_view_visible = !value.pdf_view_visible
-        });
+        Settings::toggle(cx, |settings| &mut settings.pdf_view_visible)
     });
     cx.on_action(|_: &ToggleVideoView, cx| {
-        cx.update_global::<Settings, _>(|value, _| {
-            value.video_view_visible = !value.video_view_visible
-        });
+        Settings::toggle(cx, |settings| &mut settings.video_view_visible)
+    });
+    cx.on_action(|_: &ToggleVideoFollowsSlides, cx| {
+        Settings::toggle(cx, |settings| &mut settings.video_follows_slides)
+    });
+    cx.on_action(|_: &ToggleSlidesFollowVideo, cx| {
+        Settings::toggle(cx, |settings| &mut settings.slides_follow_video)
     });
 
     set_menus(MenuState::default(), cx);
@@ -136,6 +139,9 @@ pub fn set_menus(state: MenuState, cx: &mut App) {
             MenuItem::separator(),
             MenuItem::action("Toggle PDF View", TogglePdfView).disabled(no_project),
             MenuItem::action("Toggle Video View", ToggleVideoView).disabled(no_project),
+            MenuItem::separator(),
+            MenuItem::action("Video Follows Slides", ToggleVideoFollowsSlides).disabled(no_project),
+            MenuItem::action("Slides Follow Video", ToggleSlidesFollowVideo).disabled(no_project),
             MenuItem::separator(),
             MenuItem::action("Zoom In", ZoomIn).disabled(no_pdf),
             MenuItem::action("Zoom Out", ZoomOut).disabled(no_pdf),

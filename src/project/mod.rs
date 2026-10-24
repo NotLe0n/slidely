@@ -1,6 +1,7 @@
 //! A project: the PDFs of a lecture's slides and the videos of the lecture, saved
 //! together with what's been extracted from them. Nothing in here renders UI.
 
+mod alignment;
 mod file;
 mod slides;
 
@@ -8,10 +9,10 @@ use std::path::{Path, PathBuf};
 
 use gpui_kit::{
     App, AppContext as _, AsyncApp, Context, Entity, EventEmitter, PromptButton, PromptLevel,
-    Subscription,
 };
 use rfd::AsyncFileDialog;
 
+use crate::observe::ObservedDocuments;
 use crate::pdf::{PageText, PdfDocument};
 use crate::video::{Segment, VIDEO_EXTENSIONS, VideoDocument};
 use file::{EXTENSION, PdfEntry, ProjectFile, VideoEntry};
@@ -34,7 +35,11 @@ pub struct Project {
     /// Index into `videos` of the one shown; `None` only if there are none.
     active_video: Option<usize>,
     /// Starts the next transcription when one finishes.
-    video_subscriptions: Vec<Subscription>,
+    observed_videos: ObservedDocuments<VideoDocument>,
+    /// Updates the alignment when a PDF's text comes in.
+    observed_pdfs: ObservedDocuments<PdfDocument>,
+    /// Where each slide is discussed in the videos.
+    alignment: alignment::ProjectAlignment,
     /// What was last opened or saved, to tell whether there are unsaved changes.
     saved: ProjectFile,
 }
@@ -56,8 +61,10 @@ impl Project {
             pdfs: Vec::new(),
             videos: Vec::new(),
             active_video: None,
-            video_subscriptions: Vec::new(),
-            saved: ProjectFile::new(Vec::new(), Vec::new()),
+            observed_videos: ObservedDocuments::new(),
+            observed_pdfs: ObservedDocuments::new(),
+            alignment: Default::default(),
+            saved: ProjectFile::default(),
         }
     }
 
@@ -92,6 +99,11 @@ impl Project {
     /// The video that's shown.
     pub fn active_video(&self) -> Option<&Entity<VideoDocument>> {
         self.videos.get(self.active_video?)
+    }
+
+    /// Where `video` is among the project's videos.
+    pub fn video_index(&self, video: &Entity<VideoDocument>) -> Option<usize> {
+        self.videos.iter().position(|v| v == video)
     }
 
     /// Shows the video at `ix`, pausing the one shown before.
@@ -130,6 +142,7 @@ impl Project {
             pdf
         });
         self.pdfs.push(pdf);
+        self.observe_pdfs(cx);
         cx.notify();
     }
 
@@ -141,6 +154,8 @@ impl Project {
         let pdf = self.pdfs.remove(ix);
         // Frees its rendered pages, which dropping it wouldn't.
         pdf.update(cx, |pdf, cx| pdf.close(cx));
+        self.observe_pdfs(cx);
+        self.update_alignment(cx);
         cx.notify();
     }
 
@@ -151,6 +166,7 @@ impl Project {
         }
         let pdf = self.pdfs.remove(from);
         self.pdfs.insert(to, pdf);
+        self.update_alignment(cx);
         cx.notify();
     }
 
@@ -199,6 +215,7 @@ impl Project {
         };
         self.observe_videos(cx);
         self.start_next_transcription(cx);
+        self.update_alignment(cx);
         cx.notify();
     }
 
@@ -211,18 +228,26 @@ impl Project {
         let active = self.active_video().cloned();
         let video = self.videos.remove(from);
         self.videos.insert(to, video);
-        self.active_video = active.and_then(|active| self.videos.iter().position(|v| *v == active));
+        self.active_video = active.and_then(|active| self.video_index(&active));
         self.observe_videos(cx);
+        self.update_alignment(cx);
         cx.notify();
     }
 
     /// Observes the current videos, after one was added or removed.
     fn observe_videos(&mut self, cx: &mut Context<Self>) {
         let videos = self.videos.clone();
-        self.video_subscriptions = videos
-            .iter()
-            .map(|video| cx.observe(video, |this, _, cx| this.start_next_transcription(cx)))
-            .collect();
+        self.observed_videos.observe(&videos, cx, |this, cx| {
+            this.start_next_transcription(cx);
+            this.update_alignment(cx);
+        });
+    }
+
+    /// Observes the current PDFs, after one was added or removed.
+    fn observe_pdfs(&mut self, cx: &mut Context<Self>) {
+        let pdfs = self.pdfs.clone();
+        self.observed_pdfs
+            .observe(&pdfs, cx, |this, cx| this.update_alignment(cx));
     }
 
     /// Starts transcribing the first video waiting for it, unless a transcription is
@@ -253,7 +278,7 @@ impl Project {
         self.clear(cx);
         self.is_open = true;
         self.path = None;
-        self.saved = ProjectFile::new(Vec::new(), Vec::new());
+        self.saved = ProjectFile::default();
         cx.notify();
     }
 
@@ -285,14 +310,16 @@ impl Project {
 
     /// Removes all PDFs and videos.
     fn clear(&mut self, cx: &mut Context<Self>) {
+        self.observed_pdfs.clear();
         for pdf in self.pdfs.drain(..) {
             pdf.update(cx, |pdf, cx| pdf.close(cx));
         }
-        self.video_subscriptions.clear();
+        self.observed_videos.clear();
         for video in self.videos.drain(..) {
             video.update(cx, |video, cx| video.close(cx));
         }
         self.active_video = None;
+        self.clear_alignment();
     }
 
     /// What's saved in the project file. A transcript that's still running and
