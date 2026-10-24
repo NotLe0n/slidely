@@ -12,13 +12,14 @@ use gpui_kit::{Context, Task};
 use gpui_video_player::{Url, Video};
 use gstreamer::ClockTime;
 use gstreamer::prelude::*;
+use gstreamer_app::AppSink;
 
 use transcribe::Progress;
 pub use transcribe::{Segment, Stage};
 
 pub const VIDEO_EXTENSIONS: &[&str] = &["mp4", "mkv", "webm", "mov", "avi", "m4v", "ogv"];
 /// Playback speeds offered in the speed menus.
-pub const PLAYBACK_SPEEDS: &[f64] = &[0.25, 0.5, 0.75, 1., 1.25, 1.5, 2.];
+pub const PLAYBACK_SPEEDS: &[f64] = &[0.75, 1., 1.25, 1.5, 2., 4.];
 
 /// One of the project's videos.
 pub struct VideoDocument {
@@ -219,7 +220,7 @@ impl VideoDocument {
                         async move {
                             let uri = Url::from_file_path(&path)
                                 .map_err(|()| anyhow::anyhow!("invalid path"))?;
-                            let video = Video::new(&uri)?;
+                            let video = open_video(&uri)?;
                             // Start on the first frame; playback is started from the UI.
                             video.set_paused(true);
                             anyhow::Ok(video)
@@ -434,4 +435,26 @@ impl TranscriptState {
         let ix = segments.partition_point(|segment| segment.start <= time);
         segments[..ix].last().filter(|segment| time < segment.end)
     }
+}
+
+/// Opens the video at `uri` for playback. It's the pipeline `Video::new` builds, with
+/// `scaletempo` added so the speech keeps its pitch at other playback speeds.
+fn open_video(uri: &Url) -> anyhow::Result<Video> {
+    gstreamer::init()?;
+    let pipeline = format!(
+        "playbin uri=\"{uri}\" audio-filter=scaletempo video-sink=\"videoscale ! videoconvert ! \
+         appsink name=gpui_video drop=true max-buffers=200 enable-last-sample=false \
+         caps=video/x-raw,format=NV12,pixel-aspect-ratio=1/1\""
+    );
+    let pipeline = gstreamer::parse::launch(&pipeline)?
+        .downcast::<gstreamer::Pipeline>()
+        .map_err(|_| anyhow::anyhow!("playbin isn't a pipeline"))?;
+    let video_sink = pipeline
+        .property::<gstreamer::Element>("video-sink")
+        .downcast::<gstreamer::Bin>()
+        .ok()
+        .and_then(|bin| bin.by_name("gpui_video"))
+        .and_then(|sink| sink.downcast::<AppSink>().ok())
+        .ok_or_else(|| anyhow::anyhow!("the video sink is missing"))?;
+    Ok(Video::from_gst_pipeline(pipeline, video_sink, None)?)
 }
