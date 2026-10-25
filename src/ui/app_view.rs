@@ -14,8 +14,8 @@ use super::timeline_view::{TimelineEvent, TimelineView};
 use super::video_view::{VideoView, VideoViewEvent};
 use crate::Settings;
 use crate::menus::{
-    self, FitPage, MenuState, ResetZoom, RotatePageClockwise, SetPlaybackSpeed, ToggleMute,
-    TogglePlayback, ZoomIn, ZoomOut,
+    self, FitPage, MenuState, NextSlide, PreviousSlide, ResetZoom, RotatePageClockwise,
+    SetPlaybackSpeed, ToggleMute, TogglePlayback, ZoomIn, ZoomOut,
 };
 use crate::observe::ObservedDocuments;
 use crate::pdf::PdfDocument;
@@ -249,6 +249,16 @@ fn register_view_actions(this: WeakEntity<SlidelyUi>, window: AnyWindowHandle, c
     let pdf_view = |ui: &SlidelyUi, _: &App| Some(ui.pdf_view.clone());
     let video_view = |ui: &SlidelyUi, cx: &App| ui.active_video_view(cx);
 
+    on_view_action(
+        &this,
+        window,
+        pdf_view,
+        cx,
+        |view, _: &PreviousSlide, _, cx| view.step_page(-1, cx),
+    );
+    on_view_action(&this, window, pdf_view, cx, |view, _: &NextSlide, _, cx| {
+        view.step_page(1, cx)
+    });
     on_view_action(
         &this,
         window,

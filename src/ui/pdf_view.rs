@@ -56,6 +56,10 @@ pub struct PdfView {
     /// Set by `scroll_to_page` until the scroll is done, so the page it lands on
     /// isn't reported as the user scrolling there.
     scrolling_to_page: bool,
+    /// The page `step_page` last went to, until the pages are scrolled elsewhere.
+    /// Steps go on from it rather than from the page in the middle of the viewport,
+    /// which is a later one when pages are short, or doesn't change at the end.
+    stepped_to: Option<usize>,
     focus_handle: FocusHandle,
     _subscriptions: Vec<Subscription>,
 }
@@ -91,6 +95,7 @@ impl PdfView {
             scroll_anchor: None,
             reported_page: None,
             scrolling_to_page: false,
+            stepped_to: None,
             focus_handle: cx.focus_handle(),
             _subscriptions,
         };
@@ -112,7 +117,26 @@ impl PdfView {
     pub fn scroll_to_page(&mut self, ix: usize, cx: &mut Context<Self>) {
         self.scroll_handle.scroll_to_item(ix, ScrollStrategy::Top);
         self.scrolling_to_page = true;
+        self.stepped_to = None;
         cx.notify();
+    }
+
+    /// Scrolls `delta` pages forward or back from the current one. Unlike
+    /// `scroll_to_page`, this emits `PageChanged`, since the user picked the page.
+    pub fn step_page(&mut self, delta: isize, cx: &mut Context<Self>) {
+        let page_count = self.slides(cx).sizes.len();
+        let Some(current) = self.stepped_to.or_else(|| self.current_page(cx)) else {
+            return;
+        };
+        let target = current
+            .saturating_add_signed(delta)
+            .min(page_count.saturating_sub(1));
+        if target == current {
+            return;
+        }
+        self.scroll_to_page(target, cx);
+        self.stepped_to = Some(target);
+        cx.emit(PdfViewEvent::PageChanged(target));
     }
 
     /// Emits `PageChanged` if the page in the middle of the viewport changed since
@@ -126,6 +150,7 @@ impl PdfView {
             return;
         }
         if changed && let Some(page) = page {
+            self.stepped_to = None;
             cx.emit(PdfViewEvent::PageChanged(page));
         }
     }

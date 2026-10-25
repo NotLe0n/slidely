@@ -98,10 +98,10 @@ impl TimelineView {
                 .on_click(cx.listener(move |_, _, _, cx| cx.emit(TimelineEvent::PageClicked(ix))))
                 .w(THUMBNAIL_HEIGHT * page.aspect_ratio)
                 .h(THUMBNAIL_HEIGHT)
-                .border_1()
+                .border_2()
                 .border_color(cx.theme().border)
                 .when(page.current, |thumbnail| {
-                    thumbnail.border_2().border_color(cx.theme().primary)
+                    thumbnail.border_2().border_color(cx.theme().red)
                 })
                 .when(any_discussed && !page.discussed, |thumbnail| {
                     thumbnail.opacity(0.4)

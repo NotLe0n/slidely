@@ -24,6 +24,7 @@ actions!(
     slidely,
     [ZoomIn, ZoomOut, ResetZoom, FitPage, RotatePageClockwise]
 );
+actions!(slidely, [PreviousSlide, NextSlide]);
 actions!(slidely, [TogglePlayback, ToggleMute]);
 
 /// Sets the video's playback speed to the given factor.
@@ -112,6 +113,11 @@ pub fn init(project: Entity<Project>, cx: &mut App) {
         Settings::toggle(cx, |settings| &mut settings.slides_follow_video)
     });
 
+    cx.bind_keys([
+        KeyBinding::new("left", PreviousSlide, None),
+        KeyBinding::new("right", NextSlide, None),
+    ]);
+
     set_menus(MenuState::default(), cx);
 }
 
@@ -142,6 +148,9 @@ pub fn set_menus(state: MenuState, cx: &mut App) {
             MenuItem::separator(),
             MenuItem::action("Video Follows Slides", ToggleVideoFollowsSlides).disabled(no_project),
             MenuItem::action("Slides Follow Video", ToggleSlidesFollowVideo).disabled(no_project),
+            MenuItem::separator(),
+            MenuItem::action("Previous Slide", PreviousSlide).disabled(no_pdf),
+            MenuItem::action("Next Slide", NextSlide).disabled(no_pdf),
             MenuItem::separator(),
             MenuItem::action("Zoom In", ZoomIn).disabled(no_pdf),
             MenuItem::action("Zoom Out", ZoomOut).disabled(no_pdf),
