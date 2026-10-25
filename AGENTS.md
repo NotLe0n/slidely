@@ -2,9 +2,9 @@
 
 slidely is a GPUI desktop app (through `gpui-kit`) for studying recorded
 lectures. A project holds the slides (PDFs) and recordings (videos) of a
-lecture. The videos are transcribed with whisper.cpp (`whisper-rs`, Vulkan),
-and the transcript is matched to the slide text, so each slide can be found in
-the videos. See `README.md` for what users see and how to install it.
+lecture. The videos are transcribed with whisper.cpp (`whisper-rs`, Vulkan, or
+Metal on macOS), and the transcript is matched to the slide text, so each slide
+can be found in the videos. See `README.md` for what users see and how to install it.
 
 ## Building and testing
 

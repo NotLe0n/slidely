@@ -1,5 +1,5 @@
 //! Speech-to-text for a video's audio track, with whisper.cpp running on the GPU
-//! (Vulkan). Nothing in here renders UI.
+//! (Vulkan, or Metal on macOS). Nothing in here renders UI.
 //!
 //! The audio is transcribed in blocks while it's still being decoded, so the first
 //! segments are there after seconds rather than once the whole lecture is through.

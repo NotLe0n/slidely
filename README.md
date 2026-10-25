@@ -38,8 +38,8 @@ To keep the models somewhere else, set `SLIDELY_WHISPER_MODEL` and
 ## Installation
 
 slidely is built from source with [Rust](https://rustup.rs) 1.85 or newer. It
-needs GStreamer (for video), Vulkan, CMake and a C/C++ compiler (for
-whisper.cpp).
+needs GStreamer (for video), Vulkan (Metal on macOS), CMake and a C/C++
+compiler (for whisper.cpp).
 
 ### Linux
 
@@ -66,6 +66,28 @@ cd slidely
 # download the models into models/ (see above)
 cargo run --release
 ```
+
+### macOS
+
+Install Xcode (for Metal, which whisper.cpp uses on macOS) and
+[Homebrew](https://brew.sh), then the dependencies:
+
+```sh
+brew install gstreamer pkgconf cmake
+```
+
+Then build and run it:
+
+```sh
+git clone https://github.com/Sillyhaus-GmbH/slidely.git
+cd slidely
+# download the models into models/ (see above)
+cargo run --release
+```
+
+The prebuilt macOS release needs Homebrew's `gstreamer` too. macOS blocks
+binaries downloaded from the internet that aren't signed; allow it with
+`xattr -d com.apple.quarantine slidely` in the unpacked folder.
 
 ### Windows
 

@@ -1,4 +1,4 @@
-# Builds slidely in release mode for Linux and Windows, bundles it with the
+# Builds slidely in release mode for Linux, Windows and macOS, bundles it with the
 # Whisper and Silero VAD models, and publishes the bundles as a GitHub release.
 # Run it by hand from the Actions tab.
 name: Release
@@ -32,11 +32,13 @@ jobs:
             os: ubuntu-24.04
           - name: windows-x86_64
             os: windows-latest
+          - name: macos-aarch64
+            os: macos-latest
     runs-on: ${{ matrix.os }}
     env:
       BUNDLE: slidely-${{ inputs.tag }}-${{ matrix.name }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: ./.github/actions/setup
 
@@ -45,7 +47,7 @@ jobs:
 
       - name: Cache models
         id: models
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: models
           key: models-ggml-small-q5_1-ggml-silero-v5.1.2
@@ -59,9 +61,10 @@ jobs:
           curl -fL --retry 3 -o models/ggml-silero-v5.1.2.bin https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v5.1.2.bin
 
       # The app looks for models/ in the working directory, so they go next to
-      # the binary and slidely is started from the bundle's directory.
-      - name: Bundle (Linux)
-        if: runner.os == 'Linux'
+      # the binary and slidely is started from the bundle's directory. GStreamer
+      # comes from the system (Linux) or Homebrew (macOS).
+      - name: Bundle (Linux, macOS)
+        if: runner.os != 'Windows'
         shell: bash
         run: |
           mkdir -p "dist/$BUNDLE"
@@ -86,7 +89,7 @@ jobs:
           done | awk '$3 ~ /^\/ucrt64\// { print $3 }' | sort -u | xargs -I{} cp {} "$out/"
           (cd dist && zip -qr "$BUNDLE.zip" "$BUNDLE")
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.name }}
           path: dist/${{ env.BUNDLE }}.*
@@ -98,7 +101,7 @@ jobs:
     needs: build
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true

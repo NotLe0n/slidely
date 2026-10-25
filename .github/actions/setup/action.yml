@@ -1,11 +1,18 @@
 # Installs Rust and the native dependencies slidely builds against (GStreamer,
-# Vulkan, CMake, a C/C++ compiler), the same ones README.md lists.
+# Vulkan or Metal, CMake, a C/C++ compiler), the same ones README.md lists.
 name: Set up build
 description: Install Rust and slidely's native build dependencies
 
 runs:
   using: composite
   steps:
+    # Defender scans every file the compiler and pacman write, which makes
+    # builds on Windows runners several times slower.
+    - name: Disable Defender real-time scanning (Windows)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: Set-MpPreference -DisableRealtimeMonitoring $true
+
     - name: Install dependencies (Linux)
       if: runner.os == 'Linux'
       shell: bash
@@ -18,8 +25,18 @@ runs:
         # .cargo/config.toml points VULKAN_SDK at MSYS2; the system Vulkan lives in /usr.
         echo "VULKAN_SDK=/usr" >> "$GITHUB_ENV"
 
-    - name: Install Rust (Linux)
-      if: runner.os == 'Linux'
+    # Homebrew's gstreamer formula includes the plugins. whisper.cpp uses Metal,
+    # which comes with Xcode.
+    - name: Install dependencies (macOS)
+      if: runner.os == 'macOS'
+      shell: bash
+      env:
+        HOMEBREW_NO_AUTO_UPDATE: "1"
+        HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK: "1"
+      run: brew install gstreamer pkgconf cmake
+
+    - name: Install Rust (Linux, macOS)
+      if: runner.os != 'Windows'
       shell: bash
       run: rustup toolchain install stable --profile minimal && rustup default stable
 
