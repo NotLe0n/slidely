@@ -18,7 +18,7 @@ jobs:
       - uses: ./.github/actions/setup
 
       - name: Build
-        run: cargo build --locked
+        run: cargo build --locked --profile ci
 
       - name: Test
-        run: cargo test --locked
+        run: cargo test --locked --profile ci

@@ -69,7 +69,7 @@ jobs:
           cp -r models "dist/$BUNDLE/models"
           tar -C dist -czf "dist/$BUNDLE.tar.gz" "$BUNDLE"
 
-      # Windows has no system GStreamer, so the bundle carries the MSYS2 DLLs
+      # Windows has no system GStreamer, so the bundle carries the MSYS2 (UCRT64) DLLs
       # slidely and the GStreamer plugins link against. GStreamer finds its
       # plugins in lib/gstreamer-1.0 next to libgstreamer's DLL.
       - name: Bundle (Windows)
@@ -80,10 +80,10 @@ jobs:
           mkdir -p "$out/lib/gstreamer-1.0"
           cp target/release/slidely.exe README.md "$out/"
           cp -r models "$out/models"
-          cp /mingw64/lib/gstreamer-1.0/*.dll "$out/lib/gstreamer-1.0/"
+          cp /ucrt64/lib/gstreamer-1.0/*.dll "$out/lib/gstreamer-1.0/"
           for file in "$out/slidely.exe" "$out"/lib/gstreamer-1.0/*.dll; do
             ldd "$file"
-          done | awk '$3 ~ /^\/mingw64\// { print $3 }' | sort -u | xargs -I{} cp {} "$out/"
+          done | awk '$3 ~ /^\/ucrt64\// { print $3 }' | sort -u | xargs -I{} cp {} "$out/"
           (cd dist && zip -qr "$BUNDLE.zip" "$BUNDLE")
 
       - uses: actions/upload-artifact@v4

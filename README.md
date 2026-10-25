@@ -79,21 +79,23 @@ installed at `C:\msys64`.
    rustup default stable-x86_64-pc-windows-gnu
    ```
 
-2. Install MSYS2 to `C:\msys64`. In its **MINGW64** shell, run:
+2. Install MSYS2 to `C:\msys64`. In its **UCRT64** shell, run:
 
    ```sh
    pacman -Syu
-   pacman -S mingw-w64-x86_64-gcc mingw-w64-x86_64-cmake mingw-w64-x86_64-clang \
-     mingw-w64-x86_64-pkgconf mingw-w64-x86_64-gstreamer mingw-w64-x86_64-gst-plugins-base \
-     mingw-w64-x86_64-gst-plugins-good mingw-w64-x86_64-gst-plugins-bad mingw-w64-x86_64-gst-libav \
-     mingw-w64-x86_64-vulkan-headers mingw-w64-x86_64-vulkan-loader mingw-w64-x86_64-shaderc
+   pacman -S mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-cmake mingw-w64-ucrt-x86_64-clang \
+     mingw-w64-ucrt-x86_64-pkgconf mingw-w64-ucrt-x86_64-gstreamer mingw-w64-ucrt-x86_64-gst-plugins-base \
+     mingw-w64-ucrt-x86_64-gst-plugins-good mingw-w64-ucrt-x86_64-gst-plugins-bad mingw-w64-ucrt-x86_64-gst-libav \
+     mingw-w64-ucrt-x86_64-vulkan-headers mingw-w64-ucrt-x86_64-vulkan-loader mingw-w64-ucrt-x86_64-shaderc
    ```
 
-3. Add `C:\msys64\mingw64\bin` to your `PATH`, ahead of any other MinGW
+3. Add `C:\msys64\ucrt64\bin` to your `PATH`, ahead of any other MinGW
    installation. This is needed both to build and to run slidely. If gcc comes
    from a different MinGW distribution (e.g. MinGW-Builds) than the DLLs,
    whisper.cpp crashes at startup with `STATUS_ENTRYPOINT_NOT_FOUND`
-   (`0xc0000139`).
+   (`0xc0000139`). Don't set `PKG_CONFIG_PATH` to another MSYS2 environment
+   (such as `mingw64`): linking then fails with undefined references to
+   `std::codecvt`.
 
 4. Build and run it:
 

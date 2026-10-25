@@ -29,28 +29,26 @@ runs:
       if: runner.os == 'Windows'
       uses: msys2/setup-msys2@v2
       with:
-        msystem: MINGW64
+        msystem: UCRT64
         release: false
         update: true
         install: >-
-          mingw-w64-x86_64-gcc mingw-w64-x86_64-cmake mingw-w64-x86_64-ninja mingw-w64-x86_64-clang
-          mingw-w64-x86_64-pkgconf mingw-w64-x86_64-gstreamer mingw-w64-x86_64-gst-plugins-base
-          mingw-w64-x86_64-gst-plugins-good mingw-w64-x86_64-gst-plugins-bad mingw-w64-x86_64-gst-libav
-          mingw-w64-x86_64-vulkan-headers mingw-w64-x86_64-vulkan-loader mingw-w64-x86_64-shaderc
+          mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-cmake mingw-w64-ucrt-x86_64-ninja mingw-w64-ucrt-x86_64-clang
+          mingw-w64-ucrt-x86_64-pkgconf mingw-w64-ucrt-x86_64-gstreamer mingw-w64-ucrt-x86_64-gst-plugins-base
+          mingw-w64-ucrt-x86_64-gst-plugins-good mingw-w64-ucrt-x86_64-gst-plugins-bad mingw-w64-ucrt-x86_64-gst-libav
+          mingw-w64-ucrt-x86_64-vulkan-headers mingw-w64-ucrt-x86_64-vulkan-loader mingw-w64-ucrt-x86_64-shaderc
           zip
 
-    # MSYS2's mingw64 has to come before the other MinGW installs on the runner,
+    # MSYS2's ucrt64 has to come before the other MinGW installs on the runner,
     # or whisper.cpp is built by a gcc whose runtime doesn't match the DLLs.
-    # Ninja because otherwise CMake picks a Makefiles generator, and there's no
-    # make on the runner that goes with MSYS2's gcc. libclang for bindgen comes from
-    # MSYS2 too, not from the runner's MSVC-targeting LLVM.
+    # libclang for bindgen comes from MSYS2 too, not from the runner's
+    # MSVC-targeting LLVM.
     - name: Configure environment (Windows)
       if: runner.os == 'Windows'
       shell: bash
       run: |
-        echo "C:\\msys64\\mingw64\\bin" >> "$GITHUB_PATH"
-        echo "CMAKE_GENERATOR=Ninja" >> "$GITHUB_ENV"
-        echo "LIBCLANG_PATH=C:\\msys64\\mingw64\\bin" >> "$GITHUB_ENV"
+        echo "C:\\msys64\\ucrt64\\bin" >> "$GITHUB_PATH"
+        echo "LIBCLANG_PATH=C:\\msys64\\ucrt64\\bin" >> "$GITHUB_ENV"
 
     - name: Install Rust (Windows)
       if: runner.os == 'Windows'
@@ -61,3 +59,6 @@ runs:
 
     - name: Cache Cargo
       uses: Swatinem/rust-cache@v2
+      with:
+        # Keeps the whisper.cpp build even when a later step fails.
+        cache-on-failure: true

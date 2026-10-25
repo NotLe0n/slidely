@@ -19,12 +19,13 @@ cargo fmt
   (`Cargo.toml`), so the first build is slow, but debug runs are fast enough to
   use.
 - **Windows:** the target is `x86_64-pc-windows-gnu` with MSYS2 at
-  `C:\msys64`. `C:\msys64\mingw64\bin` must come first on `PATH`, both for
-  building (pkg-config, GStreamer, Vulkan) and for running (DLLs). In Git Bash,
-  prefix commands with `export PATH="/c/msys64/mingw64/bin:$PATH";`. If
-  whisper.cpp is compiled by a different MinGW gcc than the one that ships the
-  runtime DLLs, the app crashes with `STATUS_ENTRYPOINT_NOT_FOUND`
-  (`0xc0000139`).
+  `C:\msys64`, using its UCRT64 environment (MSYS2 no longer builds the
+  GStreamer plugins for MINGW64). `C:\msys64\ucrt64\bin` must come first on
+  `PATH`, both for building (pkg-config, GStreamer, Vulkan) and for running
+  (DLLs). In Git Bash, prefix commands with
+  `export PATH="/c/msys64/ucrt64/bin:$PATH";`. If whisper.cpp is compiled by a
+  different MinGW gcc than the one that ships the runtime DLLs, the app crashes
+  with `STATUS_ENTRYPOINT_NOT_FOUND` (`0xc0000139`).
 - `.cargo/config.toml` and `cmake/windows-gnu.cmake` work around quirks in how
   whisper-rs-sys builds on windows-gnu. The comments there say why. Don't
   remove them without building on Windows.

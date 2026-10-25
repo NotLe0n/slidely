@@ -1,10 +1,13 @@
 [env]
-# whisper-rs-sys looks for the Vulkan headers/libs here; MSYS2's mingw64 has them.
-VULKAN_SDK = "C:/msys64/mingw64"
+# whisper-rs-sys looks for the Vulkan headers/libs here; MSYS2's ucrt64 has them.
+VULKAN_SDK = "C:/msys64/ucrt64"
 # Otherwise CMake picks clang targeting MSVC for whisper.cpp, including for the
 # vulkan-shaders-gen tool it builds in a separate CMake project.
 CC = "gcc"
 CXX = "g++"
 CMAKE_TOOLCHAIN_FILE_x86_64_pc_windows_gnu = { value = "cmake/windows-gnu.cmake", relative = true }
+# Otherwise CMake picks "MSYS Makefiles" when MSYSTEM is set (as in Git Bash),
+# whose make then can't find a shell to run the build in.
+CMAKE_GENERATOR_x86_64_pc_windows_gnu = "Ninja"
 # Lets bindgen find the GNU headers instead of looking for MSVC's.
 BINDGEN_EXTRA_CLANG_ARGS_x86_64_pc_windows_gnu = "--target=x86_64-w64-windows-gnu"
