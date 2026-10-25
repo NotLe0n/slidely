@@ -13,22 +13,13 @@ use crate::video::Segment;
 /// The extension of project files.
 pub const EXTENSION: &str = "slidely";
 /// Bumped when the format changes in a way older versions can't read.
-/// 1: a single `pdf`. 2: a list of `pdfs`. 3: a list of `videos`.
-const VERSION: u32 = 3;
+const VERSION: u32 = 1;
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct ProjectFile {
     version: u32,
-    #[serde(default)]
     pub pdfs: Vec<PdfEntry>,
-    /// The single PDF of version 1; moved into `pdfs` when read.
-    #[serde(default, skip_serializing)]
-    pdf: Option<PdfEntry>,
-    #[serde(default)]
     pub videos: Vec<VideoEntry>,
-    /// The single video of versions 1 and 2; moved into `videos` when read.
-    #[serde(default, skip_serializing)]
-    video: Option<VideoEntry>,
 }
 
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
@@ -70,9 +61,7 @@ impl ProjectFile {
         Self {
             version: VERSION,
             pdfs,
-            pdf: None,
             videos,
-            video: None,
         }
     }
 
@@ -90,9 +79,6 @@ impl ProjectFile {
             bail!("it was saved by a newer version of Slidely");
         }
 
-        file.pdfs.extend(file.pdf.take());
-        file.videos.extend(file.video.take());
-
         let dir = path.parent().unwrap_or(Path::new(""));
         for pdf in &mut file.pdfs {
             pdf.path = dir.join(&pdf.path);
@@ -106,8 +92,6 @@ impl ProjectFile {
     /// Writes the project file to `path`, replacing what's there. Blocking; run it on
     /// a background thread.
     pub fn write(mut self, path: &Path) -> anyhow::Result<()> {
-        // Read from an older version, it's saved in the current format.
-        self.version = VERSION;
         // Relative paths keep working when the folder is moved or shared.
         let dir = path.parent().unwrap_or(Path::new(""));
         let relative = |file: &mut PathBuf| {
