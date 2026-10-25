@@ -287,7 +287,7 @@ impl VideoDocument {
         if let Err(err) = loaded.video.seek(time, true) {
             eprintln!("Failed to seek video: {err}");
             return;
-        } 
+        }
         loaded.last_position.set(time);
         cx.notify();
 

@@ -20,11 +20,11 @@ use viterbi::viterbi;
 /// precisely a slide's start is found.
 const SLOT: Duration = Duration::from_secs(10);
 /// Speech before and after each slot that's compared along with it, since one slot
-/// alone has too few words.
-const SLOT_CONTEXT: Duration = Duration::from_secs(10);
+/// alone has few words. More blurs where one slide ends and the next begins.
+const SLOT_CONTEXT: Duration = Duration::from_secs(5);
 /// How much the words in the context count, relative to those in the slot, so the
 /// slot's own words decide where one slide ends and the next begins.
-const CONTEXT_WEIGHT: f32 = 0.5;
+const CONTEXT_WEIGHT: f32 = 0.35;
 /// Each slot a video spends on a slide an earlier video went through already. Lectures
 /// go on where the last one stopped, so talk at the start of one, e.g. announcements,
 /// that sounds like earlier slides isn't taken for going back to them.

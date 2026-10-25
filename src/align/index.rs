@@ -13,19 +13,31 @@ const HEADER_FRACTION: f32 = 0.5;
 /// ones, repeated lines are as likely to be content.
 const HEADER_MIN_PAGES: usize = 4;
 /// How many times the words of a slide's title count; lecturers tend to say it.
-const TITLE_WEIGHT: f32 = 2.;
+const TITLE_WEIGHT: f32 = 1.5;
 /// Words shorter than this, in characters, are ignored.
 const MIN_WORD_LEN: usize = 3;
+/// Words shorter than this, in characters, are compared as a whole rather than by
+/// their trigrams: all of a short word's trigrams are at its start or end, which many
+/// other words share, so "gps" would match "group" and "steps".
+const WHOLE_WORD_LEN: usize = 5;
 /// Similarity at most this many times what a good match scores, so one window
 /// doesn't outweigh many.
-const MAX_EMISSION: f32 = 2.;
+const MAX_EMISSION: f32 = 1.;
+/// Similarities are raised to this power, so a slot that matches one slide well
+/// counts for more than one that matches many a little. With hundreds of slides, some
+/// slide always matches a little by chance, and enough of that would otherwise draw
+/// the walk away, e.g. to a later chapter the lecturer mentions in passing.
+const EMISSION_POWER: f32 = 3.;
+/// How much of each slide's mean emission over the video is taken off it, so slides
+/// with words that come up all the time don't win wherever nothing matches well.
+const MEAN_EMISSION_WEIGHT: f32 = 0.5;
 /// How a slide without text matches a slot, relative to the better of the slides
-/// with text around it. A little less, so the walk passes through it where the
-/// lecturer goes from one neighbour to the other, rather than staying on it.
-const BLANK_SLIDE_EMISSION: f32 = 0.9;
+/// with text around it. Less, so the walk passes through it where the lecturer goes
+/// from one neighbour to the other, rather than staying on it.
+const BLANK_SLIDE_EMISSION: f32 = 0.7;
 /// Which of the windows' best similarities is taken as a good match, as a fraction
-/// of them sorted ascending.
-const GOOD_MATCH_QUANTILE: f32 = 0.9;
+/// of them sorted ascending. Close to the best, so only clear matches count fully.
+const GOOD_MATCH_QUANTILE: f32 = 0.995;
 
 /// Words too common to tell slides apart.
 const ENGLISH_STOPWORDS: &[&str] = &[
@@ -50,10 +62,19 @@ const GERMAN_STOPWORDS: &[&str] = &[
 /// A sparse vector of term weights.
 type TermVector = Vec<(u32, f32)>;
 
-/// The slides as TF-IDF vectors over the character trigrams of their words.
+/// What the slides and the speech are compared by.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum Term {
+    /// A character trigram of a word of at least `WHOLE_WORD_LEN`.
+    Trigram([char; 3]),
+    /// A shorter word, padded with `'\0'`.
+    Word([char; WHOLE_WORD_LEN - 1]),
+}
+
+/// The slides as TF-IDF vectors over the terms of their words.
 pub(super) struct SlideIndex {
-    /// Trigrams found on the slides, by id.
-    terms: HashMap<[char; 3], u32>,
+    /// Terms found on the slides, by id.
+    terms: HashMap<Term, u32>,
     /// Inverse document frequency of each term, by id.
     idf: Vec<f32>,
     /// One per slide, normalized to length 1; empty if it has no text.
@@ -85,9 +106,9 @@ impl SlideIndex {
                 let mut slide_counts = HashMap::new();
                 for (ix, line) in lines.iter().enumerate() {
                     let weight = if Some(ix) == title { TITLE_WEIGHT } else { 1. };
-                    for trigram in trigrams(&line.text) {
+                    for term in terms_of(&line.text) {
                         let next_id = terms.len() as u32;
-                        let id = *terms.entry(trigram).or_insert(next_id);
+                        let id = *terms.entry(term).or_insert(next_id);
                         *slide_counts.entry(id).or_insert(0.) += weight;
                     }
                 }
@@ -148,7 +169,7 @@ impl SlideIndex {
             .iter()
             .map(|segment| {
                 let mut counts = HashMap::new();
-                for id in trigrams(&segment.text).filter_map(|trigram| self.terms.get(&trigram)) {
+                for id in terms_of(&segment.text).filter_map(|term| self.terms.get(&term)) {
                     *counts.entry(*id).or_insert(0.) += 1.;
                 }
                 counts
@@ -184,7 +205,20 @@ impl SlideIndex {
         best.sort_unstable_by(f32::total_cmp);
         let good_match = best[((best.len() - 1) as f32 * GOOD_MATCH_QUANTILE) as usize];
         for similarity in similarities.iter_mut().flatten() {
-            *similarity = (*similarity / good_match).min(MAX_EMISSION);
+            *similarity = (*similarity / good_match)
+                .min(MAX_EMISSION)
+                .powf(EMISSION_POWER);
+        }
+        let mut means = vec![0.; self.vectors.len()];
+        for slot in &similarities {
+            for (mean, similarity) in means.iter_mut().zip(slot) {
+                *mean += similarity / similarities.len() as f32;
+            }
+        }
+        for slot in &mut similarities {
+            for (similarity, mean) in slot.iter_mut().zip(&means) {
+                *similarity -= MEAN_EMISSION_WEIGHT * mean;
+            }
         }
 
         // Slides without text get theirs from the nearest ones with text.
@@ -241,10 +275,11 @@ fn line_key(line: &str) -> String {
         .collect()
 }
 
-/// The character trigrams of the words in `text`, each word padded with a space on
-/// both sides so its start and end are trigrams too. Trigrams rather than whole words
-/// match inflected forms, compounds, and words the transcription misspelled.
-fn trigrams(text: &str) -> impl Iterator<Item = [char; 3]> + '_ {
+/// The terms of the words in `text`: the character trigrams of each word, padded with
+/// a space on both sides so its start and end are trigrams too, or short words as a
+/// whole. Trigrams rather than whole words match inflected forms, compounds, and words
+/// the transcription misspelled.
+fn terms_of(text: &str) -> impl Iterator<Item = Term> + '_ {
     text.split(|c: char| !c.is_alphanumeric())
         .filter(|word| !word.is_empty() && !word.chars().all(char::is_numeric))
         .map(str::to_lowercase)
@@ -254,11 +289,18 @@ fn trigrams(text: &str) -> impl Iterator<Item = [char; 3]> + '_ {
                 && !GERMAN_STOPWORDS.contains(&word.as_str())
         })
         .flat_map(|word| {
+            if word.chars().count() < WHOLE_WORD_LEN {
+                let mut chars = ['\0'; WHOLE_WORD_LEN - 1];
+                chars.iter_mut().zip(word.chars()).for_each(|(c, w)| *c = w);
+                return vec![Term::Word(chars)];
+            }
             let chars: Vec<char> = std::iter::once(' ')
                 .chain(word.chars())
                 .chain(std::iter::once(' '))
                 .collect();
-            let trigrams: Vec<[char; 3]> = chars.windows(3).map(|w| [w[0], w[1], w[2]]).collect();
-            trigrams
+            chars
+                .windows(3)
+                .map(|w| Term::Trigram([w[0], w[1], w[2]]))
+                .collect()
         })
 }
