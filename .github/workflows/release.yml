@@ -1,0 +1,119 @@
+# Builds slidely in release mode for Linux and Windows, bundles it with the
+# Whisper and Silero VAD models, and publishes the bundles as a GitHub release.
+# Run it by hand from the Actions tab.
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Tag for the release (e.g. v0.1.0). Created on the selected commit if it doesn't exist.
+        required: true
+      prerelease:
+        description: Mark the release as a pre-release
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+env:
+  # Otherwise ggml is tuned for the runner's CPU and may crash on older ones.
+  GGML_NATIVE: "OFF"
+
+jobs:
+  build:
+    name: Build (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x86_64
+            os: ubuntu-24.04
+          - name: windows-x86_64
+            os: windows-latest
+    runs-on: ${{ matrix.os }}
+    env:
+      BUNDLE: slidely-${{ inputs.tag }}-${{ matrix.name }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/setup
+
+      - name: Build
+        run: cargo build --release --locked
+
+      - name: Cache models
+        id: models
+        uses: actions/cache@v4
+        with:
+          path: models
+          key: models-ggml-small-q5_1-ggml-silero-v5.1.2
+
+      - name: Download models
+        if: steps.models.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          mkdir -p models
+          curl -fL --retry 3 -o models/ggml-small-q5_1.bin https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small-q5_1.bin
+          curl -fL --retry 3 -o models/ggml-silero-v5.1.2.bin https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v5.1.2.bin
+
+      # The app looks for models/ in the working directory, so they go next to
+      # the binary and slidely is started from the bundle's directory.
+      - name: Bundle (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          mkdir -p "dist/$BUNDLE"
+          cp target/release/slidely README.md "dist/$BUNDLE/"
+          cp -r models "dist/$BUNDLE/models"
+          tar -C dist -czf "dist/$BUNDLE.tar.gz" "$BUNDLE"
+
+      # Windows has no system GStreamer, so the bundle carries the MSYS2 DLLs
+      # slidely and the GStreamer plugins link against. GStreamer finds its
+      # plugins in lib/gstreamer-1.0 next to libgstreamer's DLL.
+      - name: Bundle (Windows)
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: |
+          out="dist/$BUNDLE"
+          mkdir -p "$out/lib/gstreamer-1.0"
+          cp target/release/slidely.exe README.md "$out/"
+          cp -r models "$out/models"
+          cp /mingw64/lib/gstreamer-1.0/*.dll "$out/lib/gstreamer-1.0/"
+          for file in "$out/slidely.exe" "$out"/lib/gstreamer-1.0/*.dll; do
+            ldd "$file"
+          done | awk '$3 ~ /^\/mingw64\// { print $3 }' | sort -u | xargs -I{} cp {} "$out/"
+          (cd dist && zip -qr "$BUNDLE.zip" "$BUNDLE")
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: dist/${{ env.BUNDLE }}.*
+          if-no-files-found: error
+          compression-level: 0
+
+  release:
+    name: Publish release
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ inputs.tag }}
+          PRERELEASE: ${{ inputs.prerelease }}
+        run: |
+          flags=()
+          if [ "$PRERELEASE" = "true" ]; then flags+=(--prerelease); fi
+          gh release create "$TAG" dist/* \
+            --target "$GITHUB_SHA" \
+            --title "slidely $TAG" \
+            --generate-notes \
+            "${flags[@]}"
