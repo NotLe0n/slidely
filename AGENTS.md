@@ -35,6 +35,9 @@ cargo fmt
 - To check the slide matching on a real lecture, run the ignored test on a
   saved project:
   `SLIDELY_ALIGN_PROJECT=path/to.slidely cargo test print_alignment -- --ignored --nocapture`
+- To time the transcription of a real video (and optionally save the transcript
+  as JSON), run the ignored test:
+  `SLIDELY_TRANSCRIBE_VIDEO=path/to/video SLIDELY_TRANSCRIPT_OUT=out.json cargo test transcribe_video -- --ignored --nocapture`
 
 ## Layout
 
@@ -55,7 +58,8 @@ computation over `PageText` and `Segment` and doesn't depend on GPUI.
 
 Slow work (rasterizing, text extraction, transcription, alignment) runs off
 the main thread: on `cx.background_executor()`, with `rayon` for PDF pages, and
-on plain `std::thread`s for loading the Whisper models. What it produces is
+on plain `std::thread`s for loading the Whisper models and transcribing (one per
+part of a video, which are transcribed at the same time). What it produces is
 saved in the project file, so it isn't done again.
 
 ## Code style

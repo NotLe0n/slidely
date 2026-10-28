@@ -401,12 +401,17 @@ impl VideoDocument {
         }
     }
 
-    /// Shows the segments of a running transcription as they come in.
+    /// Shows the segments of a running transcription as they come in. Parts of the
+    /// video are transcribed at the same time, so they're put in place by time.
     fn add_segments(&mut self, segments: Vec<Segment>, cx: &mut Context<Self>) {
         if let VideoState::Loaded(loaded) = &mut self.state
             && let TranscriptState::Running(running) = &mut loaded.transcript
+            && let Some(first) = segments.first()
         {
-            running.segments.extend(segments);
+            let ix = running
+                .segments
+                .partition_point(|segment| segment.start <= first.start);
+            running.segments.splice(ix..ix, segments);
             cx.notify();
         }
     }
