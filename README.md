@@ -13,7 +13,7 @@ slides you scroll to ("Video Follows Slides"), or the slides follow the video
 
 Prebuilt bundles for Linux (x86_64), Windows (x86_64) and macOS (Apple
 Silicon) are on the
-[releases page](https://github.com/Sillyhaus-GmbH/slidely/releases). Each one
+[releases page](https://github.com/NotLe0n/slidely/releases). Each one
 contains the `slidely` binary and the Whisper and VAD models in `models/`.
 Unpack it and start slidely from the unpacked folder, so it finds `models/`.
 Transcription runs on the GPU through Vulkan (Metal on macOS), so your graphics
@@ -107,7 +107,7 @@ headers.
 Then build and run it:
 
 ```sh
-git clone https://github.com/Sillyhaus-GmbH/slidely.git
+git clone https://github.com/NotLe0n/slidely.git
 cd slidely
 # download the models into models/ (see Models below)
 cargo run --release
@@ -125,7 +125,7 @@ brew install gstreamer pkgconf cmake
 Then build and run it:
 
 ```sh
-git clone https://github.com/Sillyhaus-GmbH/slidely.git
+git clone https://github.com/NotLe0n/slidely.git
 cd slidely
 # download the models into models/ (see Models below)
 cargo run --release
@@ -161,7 +161,7 @@ installed at `C:\msys64`.
 4. Build and run it:
 
    ```sh
-   git clone https://github.com/Sillyhaus-GmbH/slidely.git
+   git clone https://github.com/NotLe0n/slidely.git
    cd slidely
    # download the models into models/ (see Models below)
    cargo run --release
