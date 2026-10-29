@@ -6,12 +6,11 @@ lecture. The videos are transcribed with whisper.cpp (`whisper-rs`, Vulkan, or
 Metal on macOS), and the transcript is matched to the slide text, so each slide
 can be found in the videos. See `README.md` for what users see and how to install it.
 
-## Building and testing
+## Building
 
 ```sh
 cargo build
 cargo clippy
-cargo test
 cargo fmt
 ```
 
@@ -31,26 +30,20 @@ cargo fmt
   remove them without building on Windows.
 - Models live in `models/` (gitignored), relative to the working directory.
   `SLIDELY_WHISPER_MODEL` and `SLIDELY_VAD_MODEL` override the paths. See
-  `src/video/transcribe.rs`.
-- To check the slide matching on a real lecture, run the ignored test on a
-  saved project:
-  `SLIDELY_ALIGN_PROJECT=path/to.slidely cargo test print_alignment -- --ignored --nocapture`
-- To time the transcription of a real video (and optionally save the transcript
-  as JSON), run the ignored test:
-  `SLIDELY_TRANSCRIBE_VIDEO=path/to/video SLIDELY_TRANSCRIPT_OUT=out.json cargo test transcribe_video -- --ignored --nocapture`
+  `src/video/transcribe/models.rs` and `speech.rs`.
 
 ## Layout
 
-| Path | What's in it |
-| --- | --- |
-| `src/main.rs` | App setup, the global `Settings` (view visibility, follow modes) |
-| `src/menus.rs` | Actions and the menu bar |
-| `src/pdf/` | Loading, rasterizing (`hayro`) and extracting text from PDFs |
-| `src/video/` | Loading videos (GStreamer), transcription (`transcribe.rs`) |
-| `src/align/` | Matching transcripts to slides: windowed word similarity (`index.rs`) and a Viterbi walk (`viterbi.rs`) |
-| `src/project/` | The project model, its JSON `.slidely` file (`file.rs`), keeping the alignment up to date (`alignment.rs`) |
-| `src/ui/` | All views and windows |
-| `src/observe.rs`, `src/interval.rs` | Small helpers: observing each entity in a list, running a callback on an interval |
+| Path                                | What's in it                                                                                                                                                                 |
+| ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/main.rs`                       | App setup, the global `Settings` (view visibility, follow modes)                                                                                                             |
+| `src/menus.rs`                      | Actions and the menu bar                                                                                                                                                     |
+| `src/pdf/`                          | Loading, rasterizing (`hayro`) and extracting text from PDFs                                                                                                                 |
+| `src/video/`                        | Loading videos (GStreamer), playback (`playback.rs`), the transcript (`transcript.rs`) and transcribing it (`transcribe/`: audio decoding, VAD, cutting into parts, Whisper) |
+| `src/align/`                        | Matching transcripts to slides: windowed word similarity (`index.rs`) and a Viterbi walk (`viterbi.rs`)                                                                      |
+| `src/project/`                      | The project model, its JSON `.slidely` file (`file.rs`), keeping the alignment up to date (`alignment.rs`)                                                                   |
+| `src/ui/`                           | All views and windows                                                                                                                                                        |
+| `src/observe.rs`, `src/interval.rs` | Small helpers: observing each entity in a list, running a callback on an interval                                                                                            |
 
 `pdf`, `video`, `align` and `project` don't render UI, and their module docs
 say so. Keep it that way: rendering belongs in `src/ui/`. `align` is pure

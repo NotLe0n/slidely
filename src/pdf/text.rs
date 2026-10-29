@@ -39,15 +39,6 @@ pub struct TextLine {
     pub font_size: f32,
 }
 
-impl PageText {
-    /// The slide's title: its first line in the largest font.
-    #[cfg(test)]
-    pub fn title(&self) -> Option<&str> {
-        let ix = title_index(&self.lines)?;
-        Some(&self.lines[ix].text)
-    }
-}
-
 /// Lines in at least this fraction of the largest font size count as being in it, so
 /// a title isn't missed for being a little smaller than e.g. a symbol in it.
 const TITLE_FONT_FRACTION: f32 = 0.95;
