@@ -1,17 +1,17 @@
 //! Loading video files for playback. Nothing in here renders UI.
 
 mod playback;
+mod player;
 mod transcribe;
 mod transcript;
 
-use std::cell::Cell;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
+use futures::StreamExt as _;
+use futures::channel::mpsc;
 use gpui_kit::{Context, Task};
-use gpui_video_player::{Url, Video};
 
-use playback::open_video;
+pub use player::Player;
 pub use transcribe::{Segment, Stage};
 pub use transcript::{RunningTranscription, TranscriptState};
 
@@ -49,11 +49,11 @@ pub struct LoadingVideo {
 
 pub struct LoadedVideo {
     pub path: PathBuf,
-    /// Playback handle; dropping the last clone stops the pipeline.
-    pub video: Video,
+    /// Playback handle; dropping the last clone stops playback.
+    pub video: Player,
     pub transcript: TranscriptState,
-    /// Where playback was last known to be, or is seeking to; see `position`.
-    last_position: Cell<Duration>,
+    /// Notifies the document's observers whenever the playback changes.
+    _changes: Task<()>,
 }
 
 impl VideoDocument {
@@ -163,20 +163,14 @@ impl VideoDocument {
         let task = cx.spawn({
             let path = path.clone();
             async move |this, app| {
-                // Building the pipeline waits for GStreamer to preroll the file, so
-                // it's done off the main thread.
+                // Opening waits for mpv to load the file, so it's done off the main
+                // thread. It starts paused on the first frame.
+                let (changed, mut changes) = mpsc::channel(0);
                 let result = app
                     .background_executor()
                     .spawn({
                         let path = path.clone();
-                        async move {
-                            let uri = Url::from_file_path(&path)
-                                .map_err(|()| anyhow::anyhow!("invalid path"))?;
-                            let video = open_video(&uri)?;
-                            // Start on the first frame; playback is started from the UI.
-                            video.set_paused(true);
-                            anyhow::Ok(video)
-                        }
+                        async move { Player::open(&path, changed) }
                     })
                     .await;
 
@@ -189,7 +183,13 @@ impl VideoDocument {
                         Ok(video) => VideoState::Loaded(LoadedVideo {
                             path,
                             video,
-                            last_position: Cell::new(Duration::ZERO),
+                            _changes: cx.spawn(async move |this, cx| {
+                                while changes.next().await.is_some() {
+                                    if this.update(cx, |_, cx| cx.notify()).is_err() {
+                                        return;
+                                    }
+                                }
+                            }),
                             transcript: transcript
                                 .map_or(TranscriptState::Queued, TranscriptState::Done),
                         }),

@@ -57,7 +57,7 @@ pub fn transcribe(
     models::find_whisper_model()?;
     models::preload_models();
 
-    let first_decoder = AudioDecoder::open(video_path, &progress)?;
+    let first_decoder = AudioDecoder::open(video_path)?;
     let cuts = match first_decoder.duration() {
         Some(duration) => {
             progress
@@ -95,7 +95,7 @@ pub fn transcribe(
                     };
                     let decoder = match decoder {
                         Some(decoder) => Ok(decoder),
-                        None => AudioDecoder::open(video_path, progress),
+                        None => AudioDecoder::open(video_path),
                     };
                     let part = Part {
                         ix,

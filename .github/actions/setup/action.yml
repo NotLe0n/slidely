@@ -1,5 +1,5 @@
-# Installs Rust and the native dependencies slidely builds against (GStreamer,
-# Vulkan or Metal, CMake, a C/C++ compiler), the same ones README.md lists.
+# Installs Rust and the native dependencies slidely builds against (FFmpeg,
+# libmpv, Vulkan or Metal, CMake, a C/C++ compiler), the same ones README.md lists.
 name: Set up build
 description: Install Rust and slidely's native build dependencies
 
@@ -19,21 +19,21 @@ runs:
       run: |
         sudo apt-get update
         sudo apt-get install -y build-essential cmake clang pkg-config \
-          libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
+          libavformat-dev libavcodec-dev libswresample-dev libavutil-dev libmpv-dev \
           libvulkan-dev glslc \
           libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libx11-xcb-dev libfontconfig-dev libssl-dev
         # .cargo/config.toml points VULKAN_SDK at MSYS2; the system Vulkan lives in /usr.
         echo "VULKAN_SDK=/usr" >> "$GITHUB_ENV"
 
-    # Homebrew's gstreamer formula includes the plugins. whisper.cpp uses Metal,
-    # which comes with Xcode.
+    # Homebrew's mpv formula includes libmpv, and depends on ffmpeg. whisper.cpp
+    # uses Metal, which comes with Xcode.
     - name: Install dependencies (macOS)
       if: runner.os == 'macOS'
       shell: bash
       env:
         HOMEBREW_NO_AUTO_UPDATE: "1"
         HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK: "1"
-      run: brew install gstreamer pkgconf cmake
+      run: brew install ffmpeg mpv pkgconf cmake
 
     - name: Install Rust (Linux, macOS)
       if: runner.os != 'Windows'
@@ -51,8 +51,7 @@ runs:
         update: true
         install: >-
           mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-cmake mingw-w64-ucrt-x86_64-ninja mingw-w64-ucrt-x86_64-clang
-          mingw-w64-ucrt-x86_64-pkgconf mingw-w64-ucrt-x86_64-gstreamer mingw-w64-ucrt-x86_64-gst-plugins-base
-          mingw-w64-ucrt-x86_64-gst-plugins-good mingw-w64-ucrt-x86_64-gst-plugins-bad mingw-w64-ucrt-x86_64-gst-libav
+          mingw-w64-ucrt-x86_64-pkgconf mingw-w64-ucrt-x86_64-ffmpeg mingw-w64-ucrt-x86_64-mpv
           mingw-w64-ucrt-x86_64-vulkan-headers mingw-w64-ucrt-x86_64-vulkan-loader mingw-w64-ucrt-x86_64-shaderc
           zip
 

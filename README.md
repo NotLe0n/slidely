@@ -23,20 +23,16 @@ To build slidely yourself instead, see [Building from source](#building-from-sou
 
 ### Linux
 
-The Linux bundle is built on Ubuntu 24.04 and uses the system's GStreamer and
-Vulkan loader. Install them. On Debian/Ubuntu:
+The Linux bundle is built on Ubuntu 24.04 and uses the system's libmpv,
+FFmpeg and Vulkan loader. Install them:
 
 ```sh
-sudo apt install libvulkan1 \
-  gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav
+sudo apt install libvulkan1 libmpv2
 ```
 
-On Fedora:
-
-```sh
-sudo dnf install vulkan-loader \
-  gstreamer1-plugins-good gstreamer1-plugins-bad-free gstreamer1-plugins-ugly-free gstreamer1-plugin-libav
-```
+It links against the FFmpeg version Ubuntu 24.04 ships (6.1), so it only runs
+where that version is installed. On other distributions, such as Fedora,
+[build slidely from source](#building-on-linux).
 
 Then run it:
 
@@ -48,11 +44,11 @@ cd slidely-<version>-linux-x86_64
 
 ### macOS
 
-The macOS bundle uses Homebrew's GStreamer. Install
+The macOS bundle uses Homebrew's libmpv and FFmpeg. Install
 [Homebrew](https://brew.sh), then:
 
 ```sh
-brew install gstreamer
+brew install mpv
 ```
 
 macOS blocks unsigned binaries downloaded from the internet. Allow slidely and
@@ -67,15 +63,15 @@ xattr -d com.apple.quarantine slidely
 
 ### Windows
 
-The Windows bundle includes GStreamer and everything else it needs. Unzip
+The Windows bundle includes libmpv, FFmpeg and everything else it needs. Unzip
 `slidely-<version>-windows-x86_64.zip` and run `slidely.exe` from the unzipped
 folder.
 
 ## Building from source
 
 slidely is built with [Rust](https://rustup.rs) 1.85 or newer. It needs
-GStreamer (for video), Vulkan (Metal on macOS), CMake and a C/C++ compiler (for
-whisper.cpp).
+FFmpeg and libmpv (for video), Vulkan (Metal on macOS), CMake and a C/C++
+compiler (for whisper.cpp).
 
 ### Building on Linux
 
@@ -83,8 +79,7 @@ Install the dependencies. On Debian/Ubuntu:
 
 ```sh
 sudo apt install build-essential cmake clang pkg-config \
-  libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
-  gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav \
+  libavformat-dev libavcodec-dev libswresample-dev libavutil-dev libmpv-dev \
   libvulkan-dev glslc \
   libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libx11-xcb-dev libfontconfig-dev libssl-dev
 ```
@@ -93,14 +88,17 @@ On Fedora:
 
 ```sh
 sudo dnf install gcc-c++ cmake clang pkgconf-pkg-config \
-  gstreamer1-devel gstreamer1-plugins-base-devel \
-  gstreamer1-plugins-good gstreamer1-plugins-bad-free gstreamer1-plugins-ugly-free gstreamer1-plugin-libav \
+  ffmpeg-free-devel mpv-devel \
   vulkan-loader-devel vulkan-headers glslc \
   libxkbcommon-devel libxkbcommon-x11-devel wayland-devel libX11-devel fontconfig-devel openssl-devel
 ```
 
-Other distributions have the same packages under similar names: the GStreamer
-development packages and plugins, the Vulkan headers and loader, `glslc`
+Fedora's FFmpeg leaves out some codecs, such as HEVC. If a video doesn't open,
+replace it with [RPM Fusion](https://rpmfusion.org)'s:
+`sudo dnf swap ffmpeg-free ffmpeg --allowerasing`.
+
+Other distributions have the same packages under similar names: the FFmpeg and
+libmpv development packages, the Vulkan headers and loader, `glslc`
 (often packaged as `shaderc`), and the X11/Wayland/xkbcommon development
 headers.
 
@@ -119,7 +117,7 @@ Install Xcode (for Metal, which whisper.cpp uses on macOS) and
 [Homebrew](https://brew.sh), then the dependencies:
 
 ```sh
-brew install gstreamer pkgconf cmake
+brew install ffmpeg mpv pkgconf cmake
 ```
 
 Then build and run it:
@@ -148,8 +146,7 @@ installed at `C:\msys64`.
    ```sh
    pacman -Syu
    pacman -S mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-cmake mingw-w64-ucrt-x86_64-clang \
-     mingw-w64-ucrt-x86_64-pkgconf mingw-w64-ucrt-x86_64-gstreamer mingw-w64-ucrt-x86_64-gst-plugins-base \
-     mingw-w64-ucrt-x86_64-gst-plugins-good mingw-w64-ucrt-x86_64-gst-plugins-bad mingw-w64-ucrt-x86_64-gst-libav \
+     mingw-w64-ucrt-x86_64-pkgconf mingw-w64-ucrt-x86_64-ffmpeg mingw-w64-ucrt-x86_64-mpv \
      mingw-w64-ucrt-x86_64-vulkan-headers mingw-w64-ucrt-x86_64-vulkan-loader mingw-w64-ucrt-x86_64-shaderc
    ```
 

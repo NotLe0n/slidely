@@ -18,10 +18,9 @@ cargo fmt
   (`Cargo.toml`), so the first build is slow, but debug runs are fast enough to
   use.
 - **Windows:** the target is `x86_64-pc-windows-gnu` with MSYS2 at
-  `C:\msys64`, using its UCRT64 environment (MSYS2 no longer builds the
-  GStreamer plugins for MINGW64). `C:\msys64\ucrt64\bin` must come first on
-  `PATH`, both for building (pkg-config, GStreamer, Vulkan) and for running
-  (DLLs). In Git Bash, prefix commands with
+  `C:\msys64`, using its UCRT64 environment. `C:\msys64\ucrt64\bin` must come
+  first on `PATH`, both for building (pkg-config, FFmpeg, libmpv, Vulkan) and
+  for running (DLLs). In Git Bash, prefix commands with
   `export PATH="/c/msys64/ucrt64/bin:$PATH";`. If whisper.cpp is compiled by a
   different MinGW gcc than the one that ships the runtime DLLs, the app crashes
   with `STATUS_ENTRYPOINT_NOT_FOUND` (`0xc0000139`).
@@ -34,16 +33,16 @@ cargo fmt
 
 ## Layout
 
-| Path                                | What's in it                                                                                                                                                                 |
-| ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `src/main.rs`                       | App setup, the global `Settings` (view visibility, follow modes)                                                                                                             |
-| `src/menus.rs`                      | Actions and the menu bar                                                                                                                                                     |
-| `src/pdf/`                          | Loading, rasterizing (`hayro`) and extracting text from PDFs                                                                                                                 |
-| `src/video/`                        | Loading videos (GStreamer), playback (`playback.rs`), the transcript (`transcript.rs`) and transcribing it (`transcribe/`: audio decoding, VAD, cutting into parts, Whisper) |
-| `src/align/`                        | Matching transcripts to slides: windowed word similarity (`index.rs`) and a Viterbi walk (`viterbi.rs`)                                                                      |
-| `src/project/`                      | The project model, its JSON `.slidely` file (`file.rs`), keeping the alignment up to date (`alignment.rs`)                                                                   |
-| `src/ui/`                           | All views and windows                                                                                                                                                        |
-| `src/observe.rs`, `src/interval.rs` | Small helpers: observing each entity in a list, running a callback on an interval                                                                                            |
+| Path                                | What's in it                                                                                                                                                                                            |
+| ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/main.rs`                       | App setup, the global `Settings` (view visibility, follow modes)                                                                                                                                        |
+| `src/menus.rs`                      | Actions and the menu bar                                                                                                                                                                                |
+| `src/pdf/`                          | Loading, rasterizing (`hayro`) and extracting text from PDFs                                                                                                                                            |
+| `src/video/`                        | Loading and playing videos with libmpv (`player.rs`, `playback.rs`), the transcript (`transcript.rs`) and transcribing it (`transcribe/`: audio decoding with FFmpeg, VAD, cutting into parts, Whisper) |
+| `src/align/`                        | Matching transcripts to slides: windowed word similarity (`index.rs`) and a Viterbi walk (`viterbi.rs`)                                                                                                 |
+| `src/project/`                      | The project model, its JSON `.slidely` file (`file.rs`), keeping the alignment up to date (`alignment.rs`)                                                                                              |
+| `src/ui/`                           | All views and windows                                                                                                                                                                                   |
+| `src/observe.rs`, `src/interval.rs` | Small helpers: observing each entity in a list, running a callback on an interval                                                                                                                       |
 
 `pdf`, `video`, `align` and `project` don't render UI, and their module docs
 say so. Keep it that way: rendering belongs in `src/ui/`. `align` is pure

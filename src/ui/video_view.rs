@@ -1,5 +1,4 @@
-use std::cell::Cell;
-use std::rc::Rc;
+use std::sync::Arc;
 use std::time::Duration;
 
 use gpui_kit::assets::IconName;
@@ -9,12 +8,13 @@ use gpui_kit::component::slider::{Slider, SliderEvent, SliderState};
 use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use gpui_video_player::{Video, video as video_element};
 
 use super::controls::setting_toggle;
 use super::placeholders::{failed_screen, loading_dialog};
 use crate::Settings;
-use crate::video::{PLAYBACK_SPEEDS, RunningTranscription, Stage, VideoDocument, VideoState};
+use crate::video::{
+    PLAYBACK_SPEEDS, Player, RunningTranscription, Stage, VideoDocument, VideoState,
+};
 
 pub enum VideoViewEvent {
     /// The user asked to remove the video from the project: they cancelled loading
@@ -25,9 +25,8 @@ pub enum VideoViewEvent {
 /// One of the project's videos.
 pub struct VideoView {
     document: Entity<VideoDocument>,
-    /// Size of the area the video is fitted into, measured during the last paint.
-    /// The video element needs an explicit size; it can't fill its parent itself.
-    viewport: Rc<Cell<gpui_kit::Size<Pixels>>>,
+    /// The frame shown. Each one takes a texture of its own until it's dropped.
+    frame: Option<Arc<RenderImage>>,
     /// Playback position as a fraction of the video's duration.
     progress: Entity<SliderState>,
     /// Whether the progress slider is being dragged; meanwhile it isn't moved to
@@ -53,10 +52,15 @@ impl VideoView {
             cx.subscribe(&volume, Self::on_volume_event),
             // Shows whether the slides follow the video.
             cx.observe_global::<Settings>(|_, cx| cx.notify()),
+            cx.on_release(|this: &mut Self, cx| {
+                if let Some(frame) = this.frame.take() {
+                    cx.drop_image(frame, None);
+                }
+            }),
         ];
         Self {
             document,
-            viewport: Rc::new(Cell::new(gpui_kit::Size::default())),
+            frame: None,
             progress,
             seeking: false,
             volume,
@@ -64,7 +68,7 @@ impl VideoView {
         }
     }
 
-    fn video(&self, cx: &App) -> Option<Video> {
+    fn video(&self, cx: &App) -> Option<Player> {
         match self.document.read(cx).state() {
             VideoState::Loaded(loaded) => Some(loaded.video.clone()),
             _ => None,
@@ -132,7 +136,7 @@ impl VideoView {
         if let Some(video) = self.video(cx)
             && let Err(err) = video.set_speed(speed)
         {
-            eprintln!("Failed to set playback speed: {err}");
+            eprintln!("Failed to set playback speed: {err:#}");
         }
         cx.notify();
     }
@@ -141,7 +145,7 @@ impl VideoView {
     /// changed, since updating it renders this view again.
     fn sync_sliders(
         &mut self,
-        video: &Video,
+        video: &Player,
         position: Duration,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -166,28 +170,41 @@ impl VideoView {
         }
     }
 
+    /// Shows the newest frame of `video`, if there's one it hasn't shown yet.
+    fn update_frame(&mut self, video: &Player, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(frame) = video.take_frame() else {
+            return;
+        };
+        let Some(buffer) = image::RgbaImage::from_raw(frame.width, frame.height, frame.pixels)
+        else {
+            return;
+        };
+        let image = Arc::new(RenderImage::new([image::Frame::new(buffer)]));
+        if let Some(old) = self.frame.replace(image) {
+            cx.drop_image(old, Some(window));
+        }
+    }
+
     fn player(
         &mut self,
-        video: Video,
+        video: Player,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        // While playing, the video element requests a frame each paint, which
-        // renders this view again and so keeps the progress bar moving.
-        // Asking the pipeline where it is isn't free, so it's done once per frame.
+        // The player renders this view again for every new frame, and whenever the
+        // position passes a second.
+        self.update_frame(&video, window, cx);
         let position = self.document.read(cx).position();
         self.sync_sliders(&video, position, window, cx);
-        let viewport = self.viewport.get();
 
-        // Records the area's size each frame; if it changed (panel or window
-        // resized), render again so the video is laid out at the new size.
+        // Tells the player the size the video is shown at, in device pixels, so its
+        // frames are rendered at that size.
         let measure = canvas(
             {
-                let measured = self.viewport.clone();
+                let video = video.clone();
                 move |bounds, window, _| {
-                    if measured.replace(bounds.size) != bounds.size {
-                        window.refresh();
-                    }
+                    let size = bounds.size.scale(window.scale_factor());
+                    video.set_max_size(size.width.ceil().0 as u32, size.height.ceil().0 as u32);
                 }
             },
             |_, _, _, _| {},
@@ -209,14 +226,13 @@ impl VideoView {
                     .on_click(cx.listener(|this, _, _, cx| this.toggle_playback(cx)))
                     .child(measure)
                     // Positioned absolutely so the video never affects the area's size.
-                    // It's drawn aspect-fit inside the size it's given.
-                    .when(!viewport.is_zero(), |area| {
+                    .when_some(self.frame.clone(), |area, frame| {
                         area.child(
-                            div().absolute().inset_0().child(
-                                video_element(video.clone())
-                                    .id("video")
-                                    .size(viewport.width, viewport.height),
-                            ),
+                            img(ImageSource::Render(frame))
+                                .absolute()
+                                .inset_0()
+                                .size_full()
+                                .object_fit(ObjectFit::Contain),
                         )
                     }),
             )
@@ -241,7 +257,7 @@ impl VideoView {
     /// The seek slider, between the elapsed and the total time.
     fn progress_bar(
         &self,
-        video: &Video,
+        video: &Player,
         position: Duration,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
@@ -267,7 +283,7 @@ impl VideoView {
     }
 
     /// Play/pause, volume, following in the slides and speed.
-    fn controls(&self, video: &Video, cx: &mut Context<Self>) -> impl IntoElement {
+    fn controls(&self, video: &Player, cx: &mut Context<Self>) -> impl IntoElement {
         let volume = video.volume();
         h_flex()
             .gap_2()
@@ -293,7 +309,7 @@ impl VideoView {
         )
     }
 
-    fn playback_button(&self, video: &Video, cx: &mut Context<Self>) -> Button {
+    fn playback_button(&self, video: &Player, cx: &mut Context<Self>) -> Button {
         let playing = !video.paused() && !video.eos();
         Button::new("toggle-playback")
             .ghost()
@@ -306,7 +322,7 @@ impl VideoView {
             .on_click(cx.listener(|this, _, _, cx| this.toggle_playback(cx)))
     }
 
-    fn mute_button(&self, video: &Video, cx: &mut Context<Self>) -> Button {
+    fn mute_button(&self, video: &Player, cx: &mut Context<Self>) -> Button {
         let muted = video.muted() || video.volume() == 0.;
         Button::new("toggle-mute")
             .ghost()
@@ -325,7 +341,7 @@ impl VideoView {
     }
 
     /// A button showing the playback speed, with a menu to change it.
-    fn speed_menu(&self, video: &Video, cx: &mut Context<Self>) -> impl IntoElement {
+    fn speed_menu(&self, video: &Player, cx: &mut Context<Self>) -> impl IntoElement {
         let speed = video.speed();
         let view = cx.entity().downgrade();
         Button::new("speed")

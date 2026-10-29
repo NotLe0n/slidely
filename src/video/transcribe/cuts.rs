@@ -61,7 +61,7 @@ fn pause_near(
     progress: &Progress,
 ) -> anyhow::Result<Duration> {
     let from = time.saturating_sub(CUT_SEARCH);
-    let mut decoder = AudioDecoder::open(path, progress)?;
+    let mut decoder = AudioDecoder::open(path)?;
     decoder.play(from, Some(time + CUT_SEARCH))?;
     let mut audio = Vec::new();
     decoder.read(&mut audio, usize::MAX, progress, &AtomicUsize::new(0))?;

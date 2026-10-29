@@ -61,8 +61,8 @@ jobs:
           curl -fL --retry 3 -o models/ggml-silero-v5.1.2.bin https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v5.1.2.bin
 
       # The app looks for models/ in the working directory, so they go next to
-      # the binary and slidely is started from the bundle's directory. GStreamer
-      # comes from the system (Linux) or Homebrew (macOS).
+      # the binary and slidely is started from the bundle's directory. FFmpeg and
+      # libmpv come from the system (Linux) or Homebrew (macOS).
       - name: Bundle (Linux, macOS)
         if: runner.os != 'Windows'
         shell: bash
@@ -72,21 +72,18 @@ jobs:
           cp -r models "dist/$BUNDLE/models"
           tar -C dist -czf "dist/$BUNDLE.tar.gz" "$BUNDLE"
 
-      # Windows has no system GStreamer, so the bundle carries the MSYS2 (UCRT64) DLLs
-      # slidely and the GStreamer plugins link against. GStreamer finds its
-      # plugins in lib/gstreamer-1.0 next to libgstreamer's DLL.
+      # Windows has no system FFmpeg or libmpv, so the bundle carries the MSYS2
+      # (UCRT64) DLLs slidely links against, next to slidely.exe.
       - name: Bundle (Windows)
         if: runner.os == 'Windows'
         shell: msys2 {0}
         run: |
           out="dist/$BUNDLE"
-          mkdir -p "$out/lib/gstreamer-1.0"
+          mkdir -p "$out"
           cp target/release/slidely.exe README.md "$out/"
           cp -r models "$out/models"
-          cp /ucrt64/lib/gstreamer-1.0/*.dll "$out/lib/gstreamer-1.0/"
-          for file in "$out/slidely.exe" "$out"/lib/gstreamer-1.0/*.dll; do
-            ldd "$file"
-          done | awk '$3 ~ /^\/ucrt64\// { print $3 }' | sort -u | xargs -I{} cp {} "$out/"
+          ldd "$out/slidely.exe" \
+            | awk '$3 ~ /^\/ucrt64\// { print $3 }' | sort -u | xargs -I{} cp {} "$out/"
           (cd dist && zip -qr "$BUNDLE.zip" "$BUNDLE")
 
       - uses: actions/upload-artifact@v7
