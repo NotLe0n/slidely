@@ -152,6 +152,8 @@ installed at `C:\msys64`.
      mingw-w64-ucrt-x86_64-gst-plugins-good mingw-w64-ucrt-x86_64-gst-plugins-bad mingw-w64-ucrt-x86_64-gst-libav \
      mingw-w64-ucrt-x86_64-vulkan-headers mingw-w64-ucrt-x86_64-vulkan-loader mingw-w64-ucrt-x86_64-shaderc
    ```
+   - To build the release you may need to install the Windows SDK:
+     - `winget install Microsoft.WindowsSDK.10.0.26100`
 
 3. Add `C:\msys64\ucrt64\bin` to your `PATH`, ahead of any other MinGW
    installation. This is needed both to build and to run slidely.
