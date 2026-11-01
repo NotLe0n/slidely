@@ -52,6 +52,9 @@ pub fn transcribe(
     progress: Arc<Progress>,
     on_segments: impl FnMut(Vec<Segment>) + Send,
 ) -> anyhow::Result<Vec<Segment>> {
+    // whisper.cpp and ggml log every model load and VAD pass to stderr. This routes
+    // their logs through whisper-rs, which drops them without a logging backend.
+    whisper_rs::install_logging_hooks();
     // Fails early if there's no model, and otherwise loads the models while the audio
     // decodes, unless that's done already.
     models::find_whisper_model()?;
