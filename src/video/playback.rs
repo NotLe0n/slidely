@@ -21,6 +21,21 @@ impl VideoDocument {
         }
     }
 
+    /// Plays or pauses the video; at the end, plays it again from the start.
+    pub fn toggle_playback(&mut self, cx: &mut Context<Self>) {
+        let VideoState::Loaded(loaded) = &self.state else {
+            return;
+        };
+        let video = loaded.video.clone();
+        if video.eos() {
+            self.seek(Duration::ZERO, cx);
+            video.set_paused(false);
+        } else {
+            video.set_paused(!video.paused());
+        }
+        cx.notify();
+    }
+
     /// The playback position. While a seek is in progress, GStreamer can't tell,
     /// and `Video::position` says 0; this says where it's seeking to instead.
     pub fn position(&self) -> Duration {

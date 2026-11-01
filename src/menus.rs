@@ -112,10 +112,29 @@ pub fn init(project: Entity<Project>, cx: &mut App) {
     cx.on_action(|_: &ToggleSlidesFollowVideo, cx| {
         Settings::toggle(cx, |settings| &mut settings.slides_follow_video)
     });
+    let this = project.clone();
+    cx.on_action(move |_: &TogglePlayback, cx| {
+        if let Some(video) = this.read(cx).active_video().cloned() {
+            video.update(cx, |video, cx| video.toggle_playback(cx));
+        }
+    });
+    cx.on_action(|_: &ToggleMute, cx| Settings::toggle(cx, |settings| &mut settings.muted));
+    cx.on_action(|action: &SetPlaybackSpeed, cx| {
+        cx.update_global::<Settings, _>(|settings, _| settings.playback_speed = action.0)
+    });
 
     cx.bind_keys([
+        KeyBinding::new("secondary-n", NewProject, None),
+        KeyBinding::new("secondary-o", OpenProject, None),
+        KeyBinding::new("secondary-s", SaveProject, None),
+        KeyBinding::new("secondary-q", CloseProject, None),
+        KeyBinding::new("secondary-m", ManageProject, None),
+        KeyBinding::new("alt-left", TogglePdfView, None),
+        KeyBinding::new("alt-right", ToggleVideoView, None),
         KeyBinding::new("left", PreviousSlide, None),
         KeyBinding::new("right", NextSlide, None),
+        KeyBinding::new("secondary-plus", ZoomIn, None),
+        KeyBinding::new("secondary-minus", ZoomOut, None),
     ]);
 
     set_menus(MenuState::default(), cx);

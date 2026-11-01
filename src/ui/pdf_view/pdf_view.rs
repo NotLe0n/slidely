@@ -267,6 +267,7 @@ impl PdfView {
             }
             // Hand focus back to the pages once the zoom is entered.
             PdfControlsBarEvent::ZoomConfirmed => window.focus(&self.focus_handle, cx),
+            PdfControlsBarEvent::ResetZoom => self.reset_zoom(window, cx),
             PdfControlsBarEvent::FitPage => self.fit_page(window, cx),
             PdfControlsBarEvent::RotatePage => self.rotate_page(cx),
         }

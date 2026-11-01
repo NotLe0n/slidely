@@ -19,7 +19,10 @@ icon_assets!(
         Volume1,
         Volume2,
         VolumeOff,
-        VolumeX
+        VolumeX,
+        PanelLeft,
+        PanelRight,
+        ZoomIn
     ]
 );
 

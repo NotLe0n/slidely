@@ -14,13 +14,16 @@ use super::timeline_view::{TimelineEvent, TimelineView};
 use super::video_view::*;
 use crate::Settings;
 use crate::menus::{
-    self, FitPage, MenuState, NextSlide, PreviousSlide, ResetZoom, RotatePageClockwise,
-    SetPlaybackSpeed, ToggleMute, TogglePlayback, ZoomIn, ZoomOut,
+    self, FitPage, MenuState, NextSlide, PreviousSlide, ResetZoom, RotatePageClockwise, ZoomIn,
+    ZoomOut,
 };
 use crate::observe::ObservedDocuments;
 use crate::pdf::PdfDocument;
 use crate::project::{Project, ProjectEvent, add_videos, open_project};
 use crate::video::VideoDocument;
+
+const PDF_PANEL_MIN_WIDTH: Pixels = px(420.);
+const VIDEO_PANEL_MIN_WIDTH: Pixels = px(420.);
 
 /// The window's root view: title bar with menus, and the PDF and video panels and the
 /// timeline once a project is open.
@@ -30,9 +33,10 @@ pub struct SlidelyUi {
     /// What the menus were last built for.
     menus_built_for: MenuState,
     pdf_view: Entity<PdfView>,
-    /// One per video in the project, in the same order. Each video keeps its own
-    /// view, so its controls stay as they were when another one is shown.
+    /// One per video in the project, in the same order.
     video_panels: Vec<VideoPanel>,
+    /// Below the video shown, whichever it is.
+    video_controls: Entity<VideoControlsBar>,
     timeline_view: Entity<TimelineView>,
     /// The menus depend on whether the PDFs are loaded.
     pdfs: ObservedDocuments<PdfDocument>,
@@ -52,6 +56,7 @@ impl SlidelyUi {
     pub fn new(project: Entity<Project>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let pdf_view = cx.new(|cx| PdfView::new(project.clone(), window, cx));
         let timeline_view = cx.new(|cx| TimelineView::new(project.clone(), cx));
+        let video_controls = cx.new(|cx| VideoControlsBar::new(project.clone(), cx));
         let _follower = cx.new(|cx| SlideFollower::new(project.clone(), pdf_view.clone(), cx));
 
         let _subscriptions = vec![
@@ -90,6 +95,7 @@ impl SlidelyUi {
             menus_built_for: MenuState::default(),
             pdf_view,
             video_panels: Vec::new(),
+            video_controls,
             timeline_view,
             pdfs: ObservedDocuments::new(),
             _follower,
@@ -197,6 +203,7 @@ impl SlidelyUi {
             .size_full()
             .child(tab_bar)
             .child(div().flex_1().min_h_0().child(view))
+            .child(self.video_controls.clone())
             .into_any_element()
     }
 
@@ -278,7 +285,6 @@ impl SlidelyUi {
 /// its children has focus, and initially nothing has.
 fn register_view_actions(this: WeakEntity<SlidelyUi>, window: AnyWindowHandle, cx: &mut App) {
     let pdf_view = |ui: &SlidelyUi, _: &App| Some(ui.pdf_view.clone());
-    let video_view = |ui: &SlidelyUi, cx: &App| ui.active_video_view(cx);
 
     on_view_action(
         &this,
@@ -324,27 +330,6 @@ fn register_view_actions(this: WeakEntity<SlidelyUi>, window: AnyWindowHandle, c
         pdf_view,
         cx,
         |view, _: &RotatePageClockwise, _, cx| view.rotate_page(cx),
-    );
-    on_view_action(
-        &this,
-        window,
-        video_view,
-        cx,
-        |view, _: &TogglePlayback, _, cx| view.toggle_playback(cx),
-    );
-    on_view_action(
-        &this,
-        window,
-        video_view,
-        cx,
-        |view, _: &ToggleMute, _, cx| view.toggle_mute(cx),
-    );
-    on_view_action(
-        &this,
-        window,
-        video_view,
-        cx,
-        |view, action: &SetPlaybackSpeed, _, cx| view.set_speed(action.0, cx),
     );
 }
 
@@ -398,11 +383,13 @@ impl Render for SlidelyUi {
                 .child(
                     resizable_panel()
                         .visible(pdf_view_visible)
+                        .size_range(PDF_PANEL_MIN_WIDTH..Pixels::MAX)
                         .child(self.pdf_area(cx)),
                 )
                 .child(
                     resizable_panel()
                         .visible(video_view_visible)
+                        .size_range(VIDEO_PANEL_MIN_WIDTH..Pixels::MAX)
                         .child(self.video_area(cx)),
                 ),
         )

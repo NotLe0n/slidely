@@ -8,7 +8,7 @@ use gpui_kit::*;
 use gpui_video_player::{Video, video as video_element};
 
 use super::super::placeholders::{failed_screen, loading_dialog};
-use super::video_controls::{VideoControlsBar, VideoControlsBarEvent};
+use crate::Settings;
 use crate::video::{RunningTranscription, Stage, VideoDocument, VideoState};
 
 pub enum VideoViewEvent {
@@ -17,27 +17,29 @@ pub enum VideoViewEvent {
     Remove,
 }
 
-/// One of the project's videos.
+/// One of the project's videos, without the controls, which `VideoControlsBar` shows
+/// for whichever video is shown.
 pub struct VideoView {
     document: Entity<VideoDocument>,
     /// Size of the area the video is fitted into, measured during the last paint.
     /// The video element needs an explicit size; it can't fill its parent itself.
     viewport: Rc<Cell<gpui_kit::Size<Pixels>>>,
-    controls: Entity<VideoControlsBar>,
     _subscriptions: Vec<Subscription>,
 }
 
 impl VideoView {
     pub fn new(document: Entity<VideoDocument>, cx: &mut Context<Self>) -> Self {
-        let controls = cx.new(|cx| VideoControlsBar::new(document.clone(), cx));
         let _subscriptions = vec![
-            cx.observe(&document, |_, _, cx| cx.notify()),
-            cx.subscribe(&controls, Self::on_controls_event),
+            // Applies the settings once it's loaded.
+            cx.observe(&document, |this, _, cx| {
+                this.apply_settings(cx);
+                cx.notify();
+            }),
+            cx.observe_global::<Settings>(Self::apply_settings),
         ];
         Self {
             document,
             viewport: Rc::new(Cell::new(gpui_kit::Size::default())),
-            controls,
             _subscriptions,
         }
     }
@@ -49,75 +51,30 @@ impl VideoView {
         }
     }
 
-    fn on_controls_event(
-        &mut self,
-        _: Entity<VideoControlsBar>,
-        event: &VideoControlsBarEvent,
-        cx: &mut Context<Self>,
-    ) {
-        match event {
-            VideoControlsBarEvent::Seek(time) => {
-                self.document
-                    .update(cx, |document, cx| document.seek(*time, cx));
-            }
-            VideoControlsBarEvent::VolumeChanged(volume) => {
-                if let Some(video) = self.video(cx) {
-                    video.set_volume(*volume);
-                    video.set_muted(false);
-                    cx.notify();
-                }
-            }
-            VideoControlsBarEvent::TogglePlayback => self.toggle_playback(cx),
-            VideoControlsBarEvent::ToggleMute => self.toggle_mute(cx),
-            VideoControlsBarEvent::SetSpeed(speed) => self.set_speed(*speed, cx),
-        }
-    }
-
-    /// Plays or pauses the video; at the end, plays it again from the start.
-    pub fn toggle_playback(&mut self, cx: &mut Context<Self>) {
+    /// Gives the video the volume and speed from the settings, which all videos
+    /// share. Only what changed is set, since this runs whenever the document does.
+    fn apply_settings(&mut self, cx: &mut Context<Self>) {
         let Some(video) = self.video(cx) else {
             return;
         };
-        if video.eos() {
-            self.document
-                .update(cx, |document, cx| document.seek(Duration::ZERO, cx));
-            video.set_paused(false);
-        } else {
-            video.set_paused(!video.paused());
+        let settings = *cx.global::<Settings>();
+        if video.volume() != settings.volume {
+            video.set_volume(settings.volume);
         }
-        cx.notify();
-    }
-
-    pub fn toggle_mute(&mut self, cx: &mut Context<Self>) {
-        if let Some(video) = self.video(cx) {
-            video.set_muted(!video.muted());
-            cx.notify();
+        if video.muted() != settings.muted {
+            video.set_muted(settings.muted);
         }
-    }
-
-    /// Sets the playback speed as a factor of the normal speed.
-    pub fn set_speed(&mut self, speed: f64, cx: &mut Context<Self>) {
-        if let Some(video) = self.video(cx)
-            && let Err(err) = video.set_speed(speed)
+        if video.speed() != settings.playback_speed
+            && let Err(err) = video.set_speed(settings.playback_speed)
         {
             eprintln!("Failed to set playback speed: {err}");
         }
-        cx.notify();
     }
 
-    fn player(
-        &mut self,
-        video: Video,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    fn player(&mut self, video: Video, cx: &mut Context<Self>) -> impl IntoElement {
         // While playing, the video element requests a frame each paint, which
-        // renders this view again and so keeps the progress bar moving.
-        // Asking the pipeline where it is isn't free, so it's done once per frame.
+        // renders this view again and so keeps the caption up to date.
         let position = self.document.read(cx).position();
-        self.controls.update(cx, |controls, cx| {
-            controls.show_position(position, window, cx)
-        });
         let viewport = self.viewport.get();
 
         // Records the area's size each frame; if it changed (panel or window
@@ -147,7 +104,10 @@ impl VideoView {
                     .w_full()
                     .overflow_hidden()
                     .cursor_pointer()
-                    .on_click(cx.listener(|this, _, _, cx| this.toggle_playback(cx)))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.document
+                            .update(cx, |document, cx| document.toggle_playback(cx))
+                    }))
                     .child(measure)
                     // Positioned absolutely so the video never affects the area's size.
                     // It's drawn aspect-fit inside the size it's given.
@@ -162,7 +122,6 @@ impl VideoView {
                     }),
             )
             .child(self.caption(position, cx))
-            .child(self.controls.clone())
     }
 
     /// The transcript segment being spoken, once the video is transcribed.
@@ -182,7 +141,7 @@ impl VideoView {
 impl EventEmitter<VideoViewEvent> for VideoView {}
 
 impl Render for VideoView {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let view = cx.entity().downgrade();
         let remove = move |cx: &mut App| {
             view.update(cx, |_, cx| cx.emit(VideoViewEvent::Remove))
@@ -191,7 +150,7 @@ impl Render for VideoView {
         let content = match self.document.read(cx).state() {
             VideoState::Loaded(loaded) => {
                 let video = loaded.video.clone();
-                self.player(video, window, cx).into_any_element()
+                self.player(video, cx).into_any_element()
             }
             VideoState::Loading(loading) => {
                 loading_dialog("Opening video", &loading.path, cx, remove).into_any_element()

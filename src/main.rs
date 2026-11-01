@@ -18,10 +18,11 @@ use ui::SlidelyUi;
 struct Settings {
     pdf_view_visible: bool,
     video_view_visible: bool,
-    /// Whether scrolling to a page seeks the video to where it's discussed.
     video_follows_slides: bool,
-    /// Whether seeking the video scrolls to the slide discussed there.
     slides_follow_video: bool,
+    volume: f64,
+    muted: bool,
+    playback_speed: f64,
 }
 
 impl Global for Settings {}
@@ -47,6 +48,9 @@ fn main() {
                 video_view_visible: true,
                 video_follows_slides: false,
                 slides_follow_video: false,
+                volume: 1.,
+                muted: false,
+                playback_speed: 1.,
             });
 
             let project = cx.new(|_| Project::new());

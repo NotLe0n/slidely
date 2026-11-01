@@ -13,6 +13,8 @@ pub enum PdfControlsBarEvent {
     ZoomChanged(f32),
     /// The user pressed Enter in the zoom input.
     ZoomConfirmed,
+    /// The user pressed the reset zoom button.
+    ResetZoom,
     /// The user pressed the fit to page button.
     FitPage,
     /// The user pressed the rotate page button.
@@ -83,16 +85,32 @@ impl PdfControlsBar {
 
 impl Render for PdfControlsBar {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let hide_pdf_disabled = !cx.global::<Settings>().video_view_visible;
+
         h_flex()
             .flex_shrink_0()
-            .justify_end()
             .items_center()
             .gap_2()
             .px_4()
             .py_2()
             .border_t_1()
             .border_color(cx.theme().border)
-            .child("Zoom")
+            .child(
+                Button::new("hide-pdf")
+                    .ghost()
+                    .icon(IconName::PanelLeft)
+                    .tooltip("Hide PDF view")
+                    .disabled(hide_pdf_disabled)
+                    .on_click(|_, _, cx| Settings::toggle(cx, |s| &mut s.pdf_view_visible)),
+            )
+            .child(div().flex_1())
+            .child(
+                Button::new("reset-zoom")
+                    .ghost()
+                    .icon(IconName::ZoomIn)
+                    .tooltip("Reset Zoom")
+                    .on_click(cx.listener(|_, _, _, cx| cx.emit(PdfControlsBarEvent::ResetZoom))),
+            )
             .child(
                 div()
                     .flex_none()
