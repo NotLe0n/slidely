@@ -8,10 +8,10 @@ use gpui_kit::component::*;
 use gpui_kit::*;
 
 use super::follow::SlideFollower;
-use super::pdf_view::PdfView;
+use super::pdf_view::*;
 use super::placeholders::{empty_screen, file_name};
 use super::timeline_view::{TimelineEvent, TimelineView};
-use super::video_view::{VideoView, VideoViewEvent};
+use super::video_view::*;
 use crate::Settings;
 use crate::menus::{
     self, FitPage, MenuState, NextSlide, PreviousSlide, ResetZoom, RotatePageClockwise,

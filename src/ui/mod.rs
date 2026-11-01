@@ -4,7 +4,6 @@ mod app_view;
 mod controls;
 mod follow;
 mod manage_project;
-mod pdf_controls;
 mod pdf_view;
 mod placeholders;
 mod timeline_view;

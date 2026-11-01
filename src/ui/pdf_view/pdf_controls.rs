@@ -4,7 +4,7 @@ use gpui_kit::component::input::{InputEvent, InputState, NumberInput};
 use gpui_kit::component::*;
 use gpui_kit::*;
 
-use super::controls::setting_toggle;
+use super::super::controls::setting_toggle;
 use super::pdf_view::{DEFAULT_ZOOM, MAX_ZOOM, MIN_ZOOM, ZOOM_STEP};
 use crate::Settings;
 
@@ -88,8 +88,8 @@ impl Render for PdfControlsBar {
             .justify_end()
             .items_center()
             .gap_2()
-            .px_2()
-            .py_1()
+            .px_4()
+            .py_2()
             .border_t_1()
             .border_color(cx.theme().border)
             .child("Zoom")
@@ -102,7 +102,6 @@ impl Render for PdfControlsBar {
             .child(
                 Button::new("fit-page")
                     .ghost()
-                    .small()
                     .icon(IconName::Fullscreen)
                     .tooltip("Fit page")
                     .on_click(cx.listener(|_, _, _, cx| cx.emit(PdfControlsBarEvent::FitPage))),
@@ -110,20 +109,16 @@ impl Render for PdfControlsBar {
             .child(
                 Button::new("rotate-page")
                     .ghost()
-                    .small()
                     .icon(IconName::RotateCw)
                     .tooltip("Rotate page clockwise")
                     .on_click(cx.listener(|_, _, _, cx| cx.emit(PdfControlsBarEvent::RotatePage))),
             )
-            .child(
-                setting_toggle(
-                    "video-follows-slides",
-                    IconName::SquarePlay,
-                    "Seek the video to the page scrolled to",
-                    |settings| &mut settings.video_follows_slides,
-                    cx,
-                )
-                .small(),
-            )
+            .child(setting_toggle(
+                "video-follows-slides",
+                IconName::SquarePlay,
+                "Seek the video to the page scrolled to",
+                |settings| &mut settings.video_follows_slides,
+                cx,
+            ))
     }
 }

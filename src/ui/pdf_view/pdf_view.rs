@@ -8,8 +8,8 @@ use gpui_kit::*;
 // Not the component size (small, medium, ...) from the glob above.
 use gpui_kit::Size;
 
+use super::super::placeholders::{empty_screen, file_name, page_image};
 use super::pdf_controls::{PdfControlsBar, PdfControlsBarEvent};
-use super::placeholders::{empty_screen, file_name, page_image};
 use crate::observe::ObservedDocuments;
 use crate::pdf::{PX_PER_POINT, PdfDocument, PdfState};
 use crate::project::{Project, Slides, add_pdfs};
