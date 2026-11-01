@@ -1,4 +1,5 @@
-//! The pages of all of a project's PDFs as one sequence, the way they're shown.
+//! The pages of all of a project's PDFs as one sequence, which is how slides are
+//! numbered.
 
 use std::ops::Range;
 
@@ -9,7 +10,11 @@ use crate::pdf::{PdfDocument, PdfState};
 /// The pages of a project's loaded PDFs, one PDF after the other in project order.
 /// PDFs still loading, or that couldn't be opened, have no pages yet. A snapshot; it
 /// doesn't change when the PDFs do.
+#[derive(Default)]
 pub struct Slides {
+    /// The index among all of the project's slides of the first page here. 0 unless
+    /// it's only some of them, from `only`.
+    pub first: usize,
     /// Each loaded PDF and where its pages are in `sizes`, in order.
     pub documents: Vec<(Entity<PdfDocument>, Range<usize>)>,
     /// Size of each page in PDF points, as displayed (i.e. rotated).
@@ -27,7 +32,24 @@ impl Slides {
                 documents.push((pdf.clone(), start..sizes.len()));
             }
         }
-        Self { documents, sizes }
+        Self {
+            first: 0,
+            documents,
+            sizes,
+        }
+    }
+
+    /// Just the pages of `pdf`, still knowing where they are among all of them. Empty
+    /// if `pdf` isn't loaded.
+    pub fn only(self, pdf: &Entity<PdfDocument>) -> Self {
+        let Some((document, pages)) = self.documents.into_iter().find(|(d, _)| d == pdf) else {
+            return Self::default();
+        };
+        Self {
+            first: self.first + pages.start,
+            documents: vec![(document, 0..pages.len())],
+            sizes: self.sizes[pages].to_vec(),
+        }
     }
 
     pub fn len(&self) -> usize {

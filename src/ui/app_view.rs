@@ -200,6 +200,37 @@ impl SlidelyUi {
             .into_any_element()
     }
 
+    /// The PDF shown, with a tab for each of the project's PDFs to pick it. Without
+    /// PDFs, the view's placeholder for adding some.
+    fn pdf_area(&self, cx: &mut Context<Self>) -> AnyElement {
+        let project = self.project.read(cx);
+        if project.pdfs().is_empty() {
+            return self.pdf_view.clone().into_any_element();
+        }
+
+        let tabs: Vec<_> = project
+            .pdfs()
+            .iter()
+            .map(|pdf| {
+                let name = pdf.read(cx).path().map(file_name).unwrap_or_default();
+                Tab::new().label(name)
+            })
+            .collect();
+        let tab_bar = TabBar::new("pdf-tabs")
+            .selected_index(project.active_pdf_index().unwrap_or_default())
+            .on_click(cx.listener(|this, ix: &usize, _, cx| {
+                this.project
+                    .update(cx, |project, cx| project.set_active_pdf(*ix, cx))
+            }))
+            .children(tabs);
+
+        v_flex()
+            .size_full()
+            .child(tab_bar)
+            .child(div().flex_1().min_h_0().child(self.pdf_view.clone()))
+            .into_any_element()
+    }
+
     /// Rebuilds the menus if a project, PDF or video was opened or closed, so their
     /// items are enabled only while there's something to act on. Rebuilding closes an
     /// open menu, so it isn't done on every change to the documents.
@@ -367,7 +398,7 @@ impl Render for SlidelyUi {
                 .child(
                     resizable_panel()
                         .visible(pdf_view_visible)
-                        .child(self.pdf_view.clone()),
+                        .child(self.pdf_area(cx)),
                 )
                 .child(
                     resizable_panel()

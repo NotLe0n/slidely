@@ -36,9 +36,10 @@ pub enum PdfViewEvent {
     PageChanged(usize),
 }
 
-/// The pages of all of the project's PDFs, one PDF after the other as if they were
-/// one. Pages are in a virtual list so only the visible ones are laid out, and only
-/// those (plus a few around them) are rendered by their documents.
+/// The pages of the project's PDF that's shown. Pages are in a virtual list so only
+/// the visible ones are laid out, and only those (plus a few around them) are
+/// rendered by their documents. Outside of it, pages are numbered as among all of the
+/// project's slides; inside, as in the shown PDF.
 pub struct PdfView {
     project: Entity<Project>,
     /// Redraw when one of the project's PDFs changes.
@@ -46,31 +47,20 @@ pub struct PdfView {
     controls: Entity<PdfControlsBar>,
     zoom_percent: f32,
     scroll_handle: VirtualListScrollHandle,
-    /// The PDFs whose pages were shown last frame, in order. When that changes, the
-    /// scroll offset is moved so the same page stays in view.
-    shown_documents: Vec<Entity<PdfDocument>>,
-    /// Where the top of the viewport was last frame.
-    scroll_anchor: Option<ScrollAnchor>,
-    /// The page in the middle of the viewport last frame.
+    /// The PDF whose pages were shown last. When another one is shown, it's shown
+    /// from the top.
+    shown_document: Option<Entity<PdfDocument>>,
+    /// The slide in the middle of the viewport last frame.
     reported_page: Option<usize>,
     /// Set by `scroll_to_page` until the scroll is done, so the page it lands on
     /// isn't reported as the user scrolling there.
     scrolling_to_page: bool,
-    /// The page `step_page` last went to, until the pages are scrolled elsewhere.
+    /// The slide `step_page` last went to, until the pages are scrolled elsewhere.
     /// Steps go on from it rather than from the page in the middle of the viewport,
     /// which is a later one when pages are short, or doesn't change at the end.
     stepped_to: Option<usize>,
     focus_handle: FocusHandle,
     _subscriptions: Vec<Subscription>,
-}
-
-/// A spot on a page, which stays put when pages before it are added or removed.
-struct ScrollAnchor {
-    document: Entity<PdfDocument>,
-    /// The page's index in `document`.
-    page: usize,
-    /// How far down the page's item the spot is, from 0 to 1.
-    fraction: f32,
 }
 
 impl PdfView {
@@ -91,8 +81,7 @@ impl PdfView {
             controls,
             zoom_percent: DEFAULT_ZOOM,
             scroll_handle: VirtualListScrollHandle::new(),
-            shown_documents: Vec::new(),
-            scroll_anchor: None,
+            shown_document: None,
             reported_page: None,
             scrolling_to_page: false,
             stepped_to: None,
@@ -109,22 +98,34 @@ impl PdfView {
         self.pdfs.observe(&pdfs, cx, |_, cx| cx.notify());
     }
 
+    /// The pages shown.
     fn slides(&self, cx: &App) -> Slides {
-        self.project.read(cx).slides(cx)
+        self.project.read(cx).shown_slides(cx)
     }
 
-    /// Scrolls so page `ix` is at the top of the viewport.
+    /// Scrolls so slide `ix` is at the top of the viewport, showing its PDF if
+    /// another one is shown.
     pub fn scroll_to_page(&mut self, ix: usize, cx: &mut Context<Self>) {
-        self.scroll_handle.scroll_to_item(ix, ScrollStrategy::Top);
+        self.project
+            .update(cx, |project, cx| project.show_slide(ix, cx));
+        let slides = self.slides(cx);
+        let Some(page) = ix
+            .checked_sub(slides.first)
+            .filter(|&page| page < slides.len())
+        else {
+            return;
+        };
+        self.scroll_handle.scroll_to_item(page, ScrollStrategy::Top);
         self.scrolling_to_page = true;
         self.stepped_to = None;
         cx.notify();
     }
 
-    /// Scrolls `delta` pages forward or back from the current one. Unlike
-    /// `scroll_to_page`, this emits `PageChanged`, since the user picked the page.
+    /// Scrolls `delta` slides forward or back from the current one, going on into
+    /// the next or previous PDF at either end. Unlike `scroll_to_page`, this emits
+    /// `PageChanged`, since the user picked the page.
     pub fn step_page(&mut self, delta: isize, cx: &mut Context<Self>) {
-        let page_count = self.slides(cx).sizes.len();
+        let page_count = self.project.read(cx).slides(cx).len();
         let Some(current) = self.stepped_to.or_else(|| self.current_page(cx)) else {
             return;
         };
@@ -169,10 +170,11 @@ impl PdfView {
 
     /// Turns the page in the middle of the viewport 90° clockwise.
     pub fn rotate_page(&mut self, cx: &mut Context<Self>) {
-        let Some(ix) = self.current_page(cx) else {
+        let slides = self.slides(cx);
+        let Some(ix) = self.page_in_view(&slides) else {
             return;
         };
-        if let Some((document, page)) = self.slides(cx).locate(ix) {
+        if let Some((document, page)) = slides.locate(ix) {
             document.update(cx, |document, cx| document.rotate_page(page, cx));
         }
     }
@@ -180,10 +182,11 @@ impl PdfView {
     /// Zooms so the page in the middle of the viewport fits into it entirely, and
     /// scrolls that page to the top.
     pub fn fit_page(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(ix) = self.current_page(cx) else {
+        let slides = self.slides(cx);
+        let Some(ix) = self.page_in_view(&slides) else {
             return;
         };
-        let page_sizes = self.slides(cx).sizes;
+        let page_sizes = slides.sizes;
         self.zoom_percent = fit_zoom(page_sizes[ix], self.scroll_handle.bounds().size);
         let top = page_top(&page_sizes, self.display_scale(), ix);
         self.scroll_handle.set_offset(point(px(0.), -top));
@@ -269,68 +272,33 @@ impl PdfView {
         }
     }
 
-    /// The index of the page in the middle of the viewport.
+    /// The index among all slides of the page in the middle of the viewport.
     pub fn current_page(&self, cx: &App) -> Option<usize> {
-        let viewport = self.scroll_handle.bounds().size;
-        let center_y = -self.scroll_handle.offset().y + viewport.height / 2.;
-        page_at(&self.slides(cx).sizes, self.display_scale(), center_y)
+        let slides = self.slides(cx);
+        Some(slides.first + self.page_in_view(&slides)?)
     }
 
-    /// Keeps the page at the top of the viewport there when a PDF before it finished
-    /// loading, or was removed or moved, which shifts the pages after it. Its PDF's
-    /// pages are kept in view if that was removed.
-    fn keep_scroll_position(&mut self, slides: &Slides) {
-        let scale = self.display_scale();
-        let documents: Vec<_> = slides
-            .documents
-            .iter()
-            .map(|(document, _)| document.clone())
-            .collect();
-        if documents != self.shown_documents
-            && let Some(anchor) = &self.scroll_anchor
-        {
-            // The anchor's PDF, or else the first one after it that's still shown.
-            let top = self
-                .shown_documents
-                .iter()
-                .skip_while(|document| **document != anchor.document)
-                .enumerate()
-                .find_map(|(n, document)| {
-                    let (_, pages) = slides
-                        .documents
-                        .iter()
-                        .find(|(shown, pages)| shown == document && !pages.is_empty())?;
-                    let (ix, fraction) = if n == 0 {
-                        (
-                            (pages.start + anchor.page).min(pages.end - 1),
-                            anchor.fraction,
-                        )
-                    } else {
-                        (pages.start, 0.)
-                    };
-                    Some(
-                        page_top(&slides.sizes, scale, ix)
-                            + item_height(slides.sizes[ix], scale) * fraction,
-                    )
-                });
-            if let Some(top) = top {
-                let offset = self.scroll_handle.offset();
-                self.scroll_handle.set_offset(point(offset.x, -top));
-            }
-        }
-        self.shown_documents = documents;
+    /// The index in `slides` of the page in the middle of the viewport.
+    fn page_in_view(&self, slides: &Slides) -> Option<usize> {
+        let viewport = self.scroll_handle.bounds().size;
+        let center_y = -self.scroll_handle.offset().y + viewport.height / 2.;
+        page_at(&slides.sizes, self.display_scale(), center_y)
+    }
 
-        let y = -self.scroll_handle.offset().y;
-        self.scroll_anchor = page_at(&slides.sizes, scale, y).and_then(|ix| {
-            let (document, page) = slides.locate(ix)?;
-            let fraction =
-                (y - page_top(&slides.sizes, scale, ix)) / item_height(slides.sizes[ix], scale);
-            Some(ScrollAnchor {
-                document: document.clone(),
-                page,
-                fraction: fraction.clamp(0., 1.),
-            })
-        });
+    /// Shows a PDF from the top when it's shown instead of another one, unless it's
+    /// being scrolled to a page of it.
+    fn reset_scroll_on_switch(&mut self, slides: &Slides) {
+        let Some((document, _)) = slides.documents.first() else {
+            return;
+        };
+        if self.shown_document.as_ref() == Some(document) {
+            return;
+        }
+        if !self.scrolling_to_page {
+            self.scroll_handle.set_offset(point(px(0.), px(0.)));
+        }
+        self.shown_document = Some(document.clone());
+        self.stepped_to = None;
     }
 
     /// Display size per PDF point.
@@ -339,15 +307,24 @@ impl PdfView {
     }
 
     /// Tells each document which of its pages are visible, given the visible pages
-    /// of `slides`, so it renders those.
+    /// of `slides`, so it renders those. No pages of the PDFs not shown are.
     fn report_visible(&mut self, slides: &Slides, visible: Range<usize>, cx: &mut Context<Self>) {
-        let documents: Vec<_> = slides
-            .documents
+        let documents: Vec<_> = self
+            .project
+            .read(cx)
+            .pdfs()
             .iter()
-            .map(|(document, pages)| {
-                let start = visible.start.clamp(pages.start, pages.end);
-                let end = visible.end.clamp(pages.start, pages.end);
-                (document.clone(), start - pages.start..end - pages.start)
+            .map(|document| {
+                let visible = slides
+                    .documents
+                    .iter()
+                    .find(|(shown, _)| shown == document)
+                    .map_or(0..0, |(_, pages)| {
+                        let start = visible.start.clamp(pages.start, pages.end);
+                        let end = visible.end.clamp(pages.start, pages.end);
+                        start - pages.start..end - pages.start
+                    });
+                (document.clone(), visible)
             })
             .collect();
         // Reported every frame; documents ignore ranges that didn't change. Entities
@@ -490,8 +467,8 @@ impl PdfView {
 }
 
 impl PdfView {
-    /// Shown while there are no pages: there are no PDFs, they're still loading, or
-    /// they couldn't be opened.
+    /// Shown while there are no pages: there are no PDFs, or the one shown is still
+    /// loading or couldn't be opened.
     fn no_pages(&self, cx: &mut Context<Self>) -> AnyElement {
         let project = self.project.clone();
         let add_pdfs_screen = |message: String, error: Option<&str>, cx: &App| {
@@ -501,31 +478,22 @@ impl PdfView {
             .into_any_element()
         };
 
-        let pdfs = self.project.read(cx).pdfs();
-        if pdfs.is_empty() {
+        let Some(pdf) = self.project.read(cx).active_pdf() else {
             return add_pdfs_screen("No PDFs in the project".into(), None, cx);
-        }
-        let states: Vec<_> = pdfs.iter().map(|pdf| pdf.read(cx).state()).collect();
-        if states
-            .iter()
-            .any(|state| matches!(state, PdfState::Loading(_)))
-        {
-            return h_flex()
+        };
+        match pdf.read(cx).state() {
+            PdfState::Loading(_) => h_flex()
                 .gap_3()
                 .items_center()
                 .child(Spinner::new())
-                .child("Opening PDFs…")
-                .into_any_element();
-        }
-        let failed = states.iter().find_map(|state| match state {
-            PdfState::Failed { path, error, .. } => Some((file_name(path), error.clone())),
-            _ => None,
-        });
-        match failed {
-            Some((name, error)) => {
-                add_pdfs_screen(format!("Couldn't open {name}"), Some(&error), cx)
+                .child("Opening PDF…")
+                .into_any_element(),
+            PdfState::Failed { path, error, .. } => {
+                let message = format!("Couldn't open {}", file_name(path));
+                let error = error.clone();
+                add_pdfs_screen(message, Some(&error), cx)
             }
-            None => add_pdfs_screen("No PDFs in the project".into(), None, cx),
+            _ => add_pdfs_screen("The PDF has no pages".into(), None, cx),
         }
     }
 }
@@ -540,7 +508,7 @@ impl Render for PdfView {
         self.report_render_scale(render_scale, cx);
 
         let slides = self.slides(cx);
-        self.keep_scroll_position(&slides);
+        self.reset_scroll_on_switch(&slides);
         let content = if slides.is_empty() {
             self.no_pages(cx)
         } else {

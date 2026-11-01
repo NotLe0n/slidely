@@ -32,7 +32,9 @@ pub struct Project {
     /// In the order they're shown in the tabs. Each one is loaded as soon as it's
     /// added, and then transcribed one after the other in this order.
     videos: Vec<Entity<VideoDocument>>,
-    /// Index into `videos` of the one shown; `None` only if there are none.
+    /// Index into `pdfs` of the one shown.
+    active_pdf: Option<usize>,
+    /// Index into `videos` of the one shown.
     active_video: Option<usize>,
     /// Starts the next transcription when one finishes.
     observed_videos: ObservedDocuments<VideoDocument>,
@@ -60,6 +62,7 @@ impl Project {
             path: None,
             pdfs: Vec::new(),
             videos: Vec::new(),
+            active_pdf: None,
             active_video: None,
             observed_videos: ObservedDocuments::new(),
             observed_pdfs: ObservedDocuments::new(),
@@ -83,9 +86,49 @@ impl Project {
         &self.pdfs
     }
 
-    /// The pages of all loaded PDFs, the way they're shown.
+    pub fn active_pdf_index(&self) -> Option<usize> {
+        self.active_pdf
+    }
+
+    /// The PDF that's shown.
+    pub fn active_pdf(&self) -> Option<&Entity<PdfDocument>> {
+        self.pdfs.get(self.active_pdf?)
+    }
+
+    /// Shows the PDF at `ix`.
+    pub fn set_active_pdf(&mut self, ix: usize, cx: &mut Context<Self>) {
+        if ix >= self.pdfs.len() || self.active_pdf == Some(ix) {
+            return;
+        }
+        self.active_pdf = Some(ix);
+        cx.notify();
+    }
+
+    /// Shows the PDF that slide `ix` is from.
+    pub fn show_slide(&mut self, ix: usize, cx: &mut Context<Self>) {
+        let slides = self.slides(cx);
+        let pdf_ix = slides
+            .locate(ix)
+            .and_then(|(pdf, _)| self.pdfs.iter().position(|p| p == pdf));
+        if let Some(pdf_ix) = pdf_ix {
+            self.set_active_pdf(pdf_ix, cx);
+        }
+    }
+
+    /// The pages of all loaded PDFs, one after the other. Slides are numbered this
+    /// way everywhere, e.g. in the alignment.
     pub fn slides(&self, cx: &App) -> Slides {
         Slides::new(&self.pdfs, cx)
+    }
+
+    /// The pages of the PDF shown, numbered as among all slides. Empty while it isn't
+    /// loaded.
+    pub fn shown_slides(&self, cx: &App) -> Slides {
+        let slides = self.slides(cx);
+        match self.active_pdf() {
+            Some(pdf) => slides.only(pdf),
+            None => Slides::default(),
+        }
     }
 
     pub fn videos(&self) -> &[Entity<VideoDocument>] {
@@ -142,6 +185,7 @@ impl Project {
             pdf
         });
         self.pdfs.push(pdf);
+        self.active_pdf.get_or_insert(0);
         self.observe_pdfs(cx);
         cx.notify();
     }
@@ -154,18 +198,27 @@ impl Project {
         let pdf = self.pdfs.remove(ix);
         // Frees its rendered pages, which dropping it wouldn't.
         pdf.update(cx, |pdf, cx| pdf.close(cx));
+        // The PDF after it is shown, or the one before if it was the last.
+        self.active_pdf = match self.active_pdf {
+            _ if self.pdfs.is_empty() => None,
+            Some(active) if active > ix || active == self.pdfs.len() => Some(active - 1),
+            active => active,
+        };
         self.observe_pdfs(cx);
         self.update_alignment(cx);
         cx.notify();
     }
 
-    /// Moves the PDF at `from` to `to`, shifting the ones in between.
+    /// Moves the PDF at `from` to `to`, shifting the ones in between. The PDF shown
+    /// stays the same.
     pub fn move_pdf(&mut self, from: usize, to: usize, cx: &mut Context<Self>) {
         if from == to || from >= self.pdfs.len() || to >= self.pdfs.len() {
             return;
         }
+        let active = self.active_pdf().cloned();
         let pdf = self.pdfs.remove(from);
         self.pdfs.insert(to, pdf);
+        self.active_pdf = active.and_then(|active| self.pdfs.iter().position(|p| *p == active));
         self.update_alignment(cx);
         cx.notify();
     }
@@ -314,6 +367,7 @@ impl Project {
         for pdf in self.pdfs.drain(..) {
             pdf.update(cx, |pdf, cx| pdf.close(cx));
         }
+        self.active_pdf = None;
         self.observed_videos.clear();
         for video in self.videos.drain(..) {
             video.update(cx, |video, cx| video.close(cx));

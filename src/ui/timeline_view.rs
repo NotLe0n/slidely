@@ -14,7 +14,8 @@ use crate::project::Project;
 const THUMBNAIL_HEIGHT: Pixels = px(64.);
 
 pub enum TimelineEvent {
-    /// The thumbnail of the page at this index of the project's slides was clicked.
+    /// The thumbnail of the page at this index of all of the project's slides was
+    /// clicked.
     PageClicked(usize),
 }
 
@@ -24,15 +25,13 @@ struct TimelinePage {
     aspect_ratio: f32,
     /// `None` until it's rendered.
     thumbnail: Option<Arc<RenderImage>>,
-    /// The first page of a PDF other than the first one.
-    starts_pdf: bool,
     /// Whether it's discussed in the videos, as far as they're transcribed.
     discussed: bool,
     /// Whether it's discussed at the playback position of the video shown.
     current: bool,
 }
 
-/// The pages of the project's PDFs as one strip of thumbnails.
+/// The pages of the project's PDF that's shown as a strip of thumbnails.
 pub struct TimelineView {
     project: Entity<Project>,
     /// Redraw as thumbnails arrive.
@@ -61,37 +60,43 @@ impl TimelineView {
         self.pdfs.observe(&pdfs, cx, |_, cx| cx.notify());
     }
 
-    /// Copied out so the documents aren't borrowed while building the strip.
-    fn pages(&self, cx: &App) -> Vec<TimelinePage> {
+    /// The index among all slides of the first page shown, and the pages. Copied out
+    /// so the documents aren't borrowed while building the strip.
+    fn pages(&self, cx: &App) -> (usize, Vec<TimelinePage>) {
         let project = self.project.read(cx);
-        let slides = project.slides(cx);
+        let slides = project.shown_slides(cx);
         let current = project.current_slide(cx);
-        let mut pages = Vec::with_capacity(slides.len());
-        for (ix, (document, range)) in slides.documents.iter().enumerate() {
-            let PdfState::Loaded(pdf) = document.read(cx).state() else {
-                continue;
-            };
-            pages.extend(range.clone().enumerate().map(|(page, slide)| {
-                let size = slides.sizes[slide];
+        let Some((document, _)) = slides.documents.first() else {
+            return (slides.first, Vec::new());
+        };
+        let PdfState::Loaded(pdf) = document.read(cx).state() else {
+            return (slides.first, Vec::new());
+        };
+        let pages = slides
+            .sizes
+            .iter()
+            .enumerate()
+            .map(|(page, size)| {
+                let slide = slides.first + page;
                 TimelinePage {
                     aspect_ratio: size.width / size.height,
                     thumbnail: pdf.thumbnail(page).cloned(),
-                    starts_pdf: page == 0 && ix > 0,
                     discussed: project.is_discussed(slide),
                     current: current == Some(slide),
                 }
-            }));
-        }
-        pages
+            })
+            .collect();
+        (slides.first, pages)
     }
 
     /// One thumbnail per page, scrolling horizontally; clicking one jumps to its
     /// page, and to where it's discussed in the videos. Once any page is found in
     /// them, those that aren't are dimmed.
-    fn timeline(&self, pages: Vec<TimelinePage>, cx: &mut Context<Self>) -> Div {
+    fn timeline(&self, first: usize, pages: Vec<TimelinePage>, cx: &mut Context<Self>) -> Div {
         let any_discussed = pages.iter().any(|page| page.discussed);
-        let thumbnails = pages.into_iter().enumerate().map(|(ix, page)| {
-            let thumbnail = div()
+        let thumbnails = pages.into_iter().enumerate().map(|(page_ix, page)| {
+            let ix = first + page_ix;
+            div()
                 .id(("thumbnail", ix))
                 .flex_shrink_0()
                 .cursor_pointer()
@@ -108,21 +113,7 @@ impl TimelineView {
                 })
                 .rounded(cx.theme().radius)
                 .overflow_hidden()
-                .child(page_image(page.thumbnail));
-            // A line between the PDFs.
-            h_flex()
-                .flex_shrink_0()
-                .gap_1()
-                .when(page.starts_pdf, |item| {
-                    item.child(
-                        div()
-                            .mx_1()
-                            .w(px(2.))
-                            .h(THUMBNAIL_HEIGHT)
-                            .bg(cx.theme().border),
-                    )
-                })
-                .child(thumbnail)
+                .child(page_image(page.thumbnail))
         });
 
         v_flex().w_full().child(
@@ -141,11 +132,11 @@ impl EventEmitter<TimelineEvent> for TimelineView {}
 
 impl Render for TimelineView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let pages = self.pages(cx);
+        let (first, pages) = self.pages(cx);
         let content = if pages.is_empty() {
             h_flex().items_center().child("No slides")
         } else {
-            self.timeline(pages, cx)
+            self.timeline(first, pages, cx)
         };
         div()
             .px_4()
