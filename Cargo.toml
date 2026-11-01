@@ -27,6 +27,21 @@ whisper-rs = { version = "0.16", features = ["metal"] }
 [target.'cfg(not(target_os = "macos"))'.dependencies]
 whisper-rs = { version = "0.16", features = ["vulkan"] }
 
+# Times transcribing a video: `cargo bench --bench transcribe -- <video>`.
+[[bench]]
+name = "transcribe"
+path = "bench/transcribe.rs"
+harness = false
+
+# Without debug assertions, gpui's build script compiles its shaders with fxc.exe,
+# which only comes with the Windows SDK. With them, gpui compiles the shaders when it
+# runs instead, and the benchmark never draws anything.
+[profile.bench.build-override]
+debug-assertions = true
+
+[profile.bench.package.gpui-pre-windows]
+debug-assertions = true
+
 [profile.dev.package."*"]
 opt-level = 3
 
